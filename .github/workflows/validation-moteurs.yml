@@ -1,18 +1,13 @@
-name: "X1000 V2.4 - Validation securisee M1-M5"
+name: X1000 V2.4 - Validation securisee M1-M5
 
 on:
   workflow_dispatch:
-
   push:
     branches:
       - feature/installation-x1000-v2
     paths:
-      - "M1.py"
-      - "m1.py"
-      - "m2.py"
-      - "m3.py"
-      - "m4.py"
-      - "m5.py"
+      - "M*.py"
+      - "m*.py"
       - "moteurs/**"
       - "tests/**"
       - "test_*.py"
@@ -30,7 +25,7 @@ concurrency:
 
 jobs:
   validation:
-    name: "Controle M1-M5 sans publication"
+    name: Controle M1-M5 sans publication
     if: github.ref == 'refs/heads/feature/installation-x1000-v2'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -43,17 +38,17 @@ jobs:
       PYTHONPATH: "."
 
     steps:
-      - name: Recuperer la branche securisee
+      - name: Recuperer branche securisee
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
       - name: Installer Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
-      - name: Verifier la branche
+      - name: Verifier branche
         shell: bash
         run: |
           set -euo pipefail
@@ -64,147 +59,148 @@ jobs:
           test "$(git branch --show-current)" = \
             "feature/installation-x1000-v2"
 
-          echo "Branche securisee confirmee"
+          echo "Branche securisee : OK"
 
-      - name: Controler la syntaxe Python
+      - name: Verifier syntaxe Python
         shell: bash
         run: |
+          set -euo pipefail
+
           python - <<'PY'
           import ast
           from pathlib import Path
 
-          exclus = {
-              "venv",
+          excluded = {
+              ".git",
               ".venv",
+              "venv",
               "__pycache__",
               "node_modules",
-              "site-packages",
+              "site-packages"
           }
 
-          fichiers = sorted(
+          files = sorted(
               p for p in Path(".").rglob("*.py")
               if not any(
-                  part.startswith(".") or part in exclus
+                  part in excluded
+                  or part.startswith(".")
                   for part in p.parts
               )
           )
 
-          if not fichiers:
-              raise RuntimeError(
-                  "Aucun fichier Python trouve"
+          if not files:
+              raise SystemExit(
+                  "ERREUR : aucun fichier Python"
               )
 
-          for fichier in fichiers:
-              contenu = fichier.read_text(
-                  encoding="utf-8-sig"
-              )
+          for path in files:
               ast.parse(
-                  contenu,
-                  filename=str(fichier)
+                  path.read_text(
+                      encoding="utf-8-sig"
+                  ),
+                  filename=str(path)
               )
-              print("SYNTAXE OK:", fichier)
+              print("SYNTAXE OK :", path)
 
+          print("Fichiers controles :", len(files))
+          PY
+
+      - name: Verifier cinq moteurs independants
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path(".")
+          folder = Path("moteurs")
+          found = []
+
+          for number in range(1, 6):
+              names = (
+                  f"m{number}.py",
+                  f"M{number}.py"
+              )
+
+              candidates = [
+                  base / name
+                  for base in (folder, root)
+                  for name in names
+                  if (base / name).is_file()
+              ]
+
+              if not candidates:
+                  raise SystemExit(
+                      f"ERREUR : moteur M{number} absent"
+                  )
+
+              for path in candidates:
+                  if path.stat().st_size == 0:
+                      raise SystemExit(
+                          f"ERREUR : moteur vide {path}"
+                      )
+
+              chosen = candidates[0]
+              found.append(chosen)
+
+              print(
+                  f"M{number} : PRESENT - {chosen}"
+              )
+
+              if len(candidates) > 1:
+                  print(
+                      f"AVERTISSEMENT M{number} : "
+                      "plusieurs fichiers detectes"
+                  )
+
+          if len(found) != 5:
+              raise SystemExit(
+                  "ERREUR : cinq moteurs requis"
+              )
+
+          print("M1-M5 : PRESENCE CONFIRMEE")
           print(
-              f"{len(fichiers)} fichiers controles"
+              "Independance fonctionnelle "
+              "non prouvee par ce controle"
           )
           PY
 
-      - name: Verifier les cinq moteurs
+      - name: Verifier composants centraux
         shell: bash
         run: |
+          set -euo pipefail
+
           python - <<'PY'
           from pathlib import Path
 
-          racine = Path(".")
-          dossier = Path("moteurs")
-
-          emplacements = []
-
-          for numero in range(1, 6):
-              noms = [
-                  f"m{numero}.py",
-                  f"M{numero}.py",
-              ]
-
-              candidats = [
-                  base / nom
-                  for base in (dossier, racine)
-                  for nom in noms
-                  if (base / nom).is_file()
-              ]
-
-              if not candidats:
-                  raise RuntimeError(
-                      f"Moteur M{numero} absent"
-                  )
-
-              for fichier in candidats:
-                  if fichier.stat().st_size == 0:
-                      raise RuntimeError(
-                          f"Moteur vide: {fichier}"
-                      )
-
-              choisi = candidats[0]
-              emplacements.append(choisi)
-
-              print(
-                  f"M{numero}: presence OK - {choisi}"
-              )
-
-              if len(candidats) > 1:
-                  print(
-                      "AVERTISSEMENT: versions multiples:",
-                      ", ".join(map(str, candidats))
-                  )
-
-          noyau = dossier / "noyau_commun.py"
-
-          if noyau.is_file():
-              if noyau.stat().st_size == 0:
-                  raise RuntimeError(
-                      "Noyau commun vide"
-                  )
-              print("Noyau commun present")
-          else:
-              print(
-                  "Noyau commun non present: "
-                  "dependances a verifier par les tests"
-              )
-
-          print("Cinq moteurs reperes")
-          PY
-
-      - name: Verifier les composants centraux
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          requis = [
+          required = (
               "validation_moteurs.py",
               "coordination_x1000.py",
-              "config_x1000.py",
-          ]
+              "config_x1000.py"
+          )
 
-          for nom in requis:
-              fichier = Path(nom)
+          for name in required:
+              path = Path(name)
 
-              if not fichier.is_file():
-                  raise RuntimeError(
-                      f"Fichier requis absent: {nom}"
+              if not path.is_file():
+                  raise SystemExit(
+                      f"ERREUR : fichier absent {name}"
                   )
 
-              if fichier.stat().st_size == 0:
-                  raise RuntimeError(
-                      f"Fichier vide: {nom}"
+              if path.stat().st_size == 0:
+                  raise SystemExit(
+                      f"ERREUR : fichier vide {name}"
                   )
 
-              print("COMPOSANT OK:", nom)
+              print("COMPOSANT OK :", name)
           PY
 
-      - name: Executer les tests Python
+      - name: Executer tests Python
         shell: bash
         run: |
+          set -euo pipefail
+
           python - <<'PY'
           import sys
           import unittest
@@ -213,57 +209,52 @@ jobs:
           loader = unittest.TestLoader()
           suite = unittest.TestSuite()
 
-          tests_racine = sorted(
+          for path in sorted(
               Path(".").glob("test_*.py")
-          )
-
-          for fichier in tests_racine:
+          ):
               suite.addTests(
                   loader.loadTestsFromName(
-                      fichier.stem
+                      path.stem
                   )
               )
 
-          dossier = Path("tests")
+          folder = Path("tests")
 
-          if dossier.is_dir():
+          if folder.is_dir():
               suite.addTests(
                   loader.discover(
-                      start_dir=str(dossier),
+                      start_dir=str(folder),
                       pattern="test_*.py",
-                      top_level_dir=str(dossier),
+                      top_level_dir=str(folder)
                   )
               )
 
-          nombre = suite.countTestCases()
+          count = suite.countTestCases()
 
-          if nombre == 0:
-              raise RuntimeError(
-                  "Aucun test Python executable trouve"
+          if count == 0:
+              raise SystemExit(
+                  "ERREUR : aucun test decouvert"
               )
 
-          print(
-              f"{nombre} tests decouverts"
-          )
+          print("Tests decouverts :", count)
 
-          resultat = unittest.TextTestRunner(
+          result = unittest.TextTestRunner(
               verbosity=2
           ).run(suite)
 
-          if not resultat.wasSuccessful():
+          if not result.wasSuccessful():
               sys.exit(1)
 
-          print("Tests Python reussis")
+          print("Tests Python : REUSSIS")
           PY
 
-      - name: Verifier les modifications locales
+      - name: Verifier depot inchange
         if: always()
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Etat du depot apres controles"
-          git status --short
+          echo "Verification du depot"
 
           if ! git diff --quiet ||
              ! git diff --cached --quiet; then
@@ -276,24 +267,27 @@ jobs:
             exit 1
           fi
 
-          echo "Aucune modification locale detectee"
+          echo "Depot inchange : OK"
 
       - name: Bilan de validation
         if: success()
         shell: bash
         run: |
+          set -euo pipefail
+
           {
-            echo "## X1000 V2.4"
+            echo "## X1000 V2.4 - M1 a M5"
             echo ""
-            echo "Validation technique reussie."
+            echo "- Branche securisee : OK"
+            echo "- Syntaxe Python : OK"
+            echo "- Cinq moteurs : presents"
+            echo "- Composants centraux : presents"
+            echo "- Tests Python : reussis"
+            echo "- Depot : inchange"
+            echo "- Publication : aucune"
+            echo "- FIGE : aucun par le workflow"
+            echo "- Commit automatique : aucun"
             echo ""
-            echo "- Branche securisee uniquement"
-            echo "- Syntaxe Python controlee"
-            echo "- M1 a M5 reperes"
-            echo "- Composants centraux presents"
-            echo "- Tests Python executes"
-            echo "- Depot sans modification"
-            echo "- Aucune publication par le workflow"
-            echo "- Aucun commit automatique"
-            echo "- Aucun FIGE cree par le workflow"
+            echo "Aucune prediction publiee."
+            echo "Autonomie sportive non certifiee."
           } >> "$GITHUB_STEP_SUMMARY"
