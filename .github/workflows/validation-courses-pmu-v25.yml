@@ -1,3 +1,4 @@
+
 name: X1000 V2.5 - Validation courses PMU France
 
 on:
@@ -27,9 +28,9 @@ jobs:
 
     env:
       TZ: Europe/Paris
-      PYTHONDONTWRITEBYTECODE: "1"
-      PYTHONUNBUFFERED: "1"
-      PYTHONNOUSERSITE: "1"
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      PYTHONNOUSERSITE: '1'
 
     steps:
       - name: Recuperer branche securisee
@@ -40,7 +41,7 @@ jobs:
       - name: Installer Python 3.12
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
       - name: Verifier branche fichiers et syntaxe
         shell: bash
@@ -48,33 +49,38 @@ jobs:
           set -euo pipefail
 
           test "$GITHUB_REF" = \
-            "refs/heads/feature/installation-x1000-v2"
+            'refs/heads/feature/installation-x1000-v2'
 
           python - <<'PY'
           import ast
           from pathlib import Path
 
-          for nom in (
-              "audit_collecte_pmu.py",
-              "validation_courses_pmu_v25.py",
+          for name in (
+              'audit_collecte_pmu.py',
+              'validation_courses_pmu_v25.py',
           ):
-              fichier = Path(nom)
-              if not fichier.is_file():
-                  raise SystemExit(f"Fichier absent : {nom}")
+              path = Path(name)
+
+              if not path.is_file():
+                  raise SystemExit(
+                      f'ERREUR : fichier absent : {name}'
+                  )
 
               ast.parse(
-                  fichier.read_text(encoding="utf-8"),
-                  filename=nom,
+                  path.read_text(encoding='utf-8'),
+                  filename=name,
               )
-              print(f"OK : {nom}")
 
-          print("Syntaxe Python conforme")
+              print(f'OK : {name}')
+
+          print('Syntaxe Python conforme')
           PY
 
       - name: Executer validation PMU
         shell: bash
         run: |
           set -euo pipefail
+
           python validation_courses_pmu_v25.py \
             > "$RUNNER_TEMP/validation-v25.json"
 
@@ -87,243 +93,329 @@ jobs:
           import json
           import os
           import re
+
           from datetime import datetime, timezone
           from pathlib import Path
           from zoneinfo import ZoneInfo
 
-          def exiger(condition, message):
+          def require(condition, message):
               if not condition:
                   raise ValueError(message)
 
-          def sans_doublons(paires):
-              resultat = {}
-              for cle, valeur in paires:
-                  if cle in resultat:
-                      raise ValueError(
-                          f"Cle JSON dupliquee : {cle}"
-                      )
-                  resultat[cle] = valeur
-              return resultat
+          def unique_pairs(pairs):
+              result = {}
 
-          def constante_interdite(valeur):
+              for key, value in pairs:
+                  require(
+                      key not in result,
+                      f'Cle JSON dupliquee : {key}'
+                  )
+                  result[key] = value
+
+              return result
+
+          def invalid_constant(value):
               raise ValueError(
-                  f"Constante JSON interdite : {valeur}"
+                  f'Constante JSON interdite : {value}'
               )
 
-          chemin = (
-              Path(os.environ["RUNNER_TEMP"])
-              / "validation-v25.json"
+          def aware_datetime(value, label):
+              require(
+                  isinstance(value, str),
+                  f'{label} absent'
+              )
+
+              try:
+                  dt = datetime.fromisoformat(
+                      value.replace('Z', '+00:00')
+                  )
+              except ValueError as exc:
+                  raise ValueError(
+                      f'{label} invalide'
+                  ) from exc
+
+              require(
+                  dt.tzinfo is not None
+                  and dt.utcoffset() is not None,
+                  f'{label} sans fuseau'
+              )
+
+              return dt
+
+          report = (
+              Path(os.environ['RUNNER_TEMP'])
+              / 'validation-v25.json'
           )
 
-          exiger(chemin.is_file(), "Rapport absent")
-          exiger(
-              0 < chemin.stat().st_size <= 2_000_000,
-              "Taille du rapport invalide"
+          require(
+              report.is_file(),
+              'Rapport JSON absent'
+          )
+
+          require(
+              0 < report.stat().st_size <= 2_000_000,
+              'Taille rapport invalide'
           )
 
           data = json.loads(
-              chemin.read_text(encoding="utf-8"),
-              object_pairs_hook=sans_doublons,
-              parse_constant=constante_interdite,
+              report.read_text(encoding='utf-8'),
+              object_pairs_hook=unique_pairs,
+              parse_constant=invalid_constant,
           )
 
-          exiger(isinstance(data, dict), "Rapport invalide")
-          exiger(data.get("version") == "2.5", "Version invalide")
-          exiger(
-              data.get("statut")
-              == "VALIDATION_TECHNIQUE_SANS_PUBLICATION",
-              "Statut technique invalide"
+          require(
+              isinstance(data, dict),
+              'Rapport JSON non objet'
           )
 
-          for cle in (
-              "publication",
-              "fige",
-              "validation_sportive",
-              "transmission_moteurs",
+          require(
+              data.get('version') == '2.5',
+              'Version invalide'
+          )
+
+          require(
+              data.get('statut')
+              == 'VALIDATION_TECHNIQUE_SANS_PUBLICATION',
+              'Statut technique invalide'
+          )
+
+          for key in (
+              'publication',
+              'fige',
+              'validation_sportive',
+              'transmission_moteurs',
           ):
-              exiger(
-                  data.get(cle) is False,
-                  f"Interdiction non respectee : {cle}"
+              require(
+                  data.get(key) is False,
+                  f'Interdiction non respectee : {key}'
               )
 
-          maintenant = datetime.now(timezone.utc)
-          date_paris = maintenant.astimezone(
-              ZoneInfo("Europe/Paris")
+          now = datetime.now(timezone.utc)
+
+          paris_date = now.astimezone(
+              ZoneInfo('Europe/Paris')
           ).date()
 
-          exiger(
-              data.get("date") == date_paris.isoformat(),
-              "Date PMU incorrecte"
+          require(
+              data.get('date') == paris_date.isoformat(),
+              'Date PMU incorrecte'
           )
 
-          source = (
-              "https://online.turfinfo.api.pmu.fr"
-              "/rest/client/1/programme/"
-              + date_paris.strftime("%d%m%Y")
-          )
-          exiger(data.get("source") == source, "Source incorrecte")
-
-          empreinte = data.get("source_sha256")
-          exiger(
-              isinstance(empreinte, str)
-              and re.fullmatch(r"[0-9a-f]{64}", empreinte) is not None,
-              "Empreinte source invalide"
+          expected_source = (
+              'https://online.turfinfo.api.pmu.fr'
+              '/rest/client/1/programme/'
+              + paris_date.strftime('%d%m%Y')
           )
 
-          collecte = data.get("collecte_a")
-          exiger(isinstance(collecte, str), "Collecte absente")
-
-          horodatage = datetime.fromisoformat(
-              collecte.replace("Z", "+00:00")
-          )
-          exiger(
-              horodatage.tzinfo is not None
-              and horodatage.utcoffset() is not None,
-              "Fuseau horaire absent"
-          )
-          exiger(
-              abs((maintenant - horodatage).total_seconds()) <= 600,
-              "Collecte hors tolerance"
+          require(
+              data.get('source') == expected_source,
+              'Source incorrecte'
           )
 
-          courses = data.get("courses")
-          exiger(isinstance(courses, list), "Courses invalides")
-          exiger(len(courses) <= 150, "Trop de courses")
+          digest = data.get('source_sha256')
 
-          compteurs = {"OK": 0, "PARTIEL": 0, "REFUSE": 0}
-          identifiants = set()
+          require(
+              isinstance(digest, str)
+              and re.fullmatch(
+                  r'[0-9a-f]{64}', digest
+              ) is not None,
+              'Empreinte SHA256 invalide'
+          )
+
+          collected = aware_datetime(
+              data.get('collecte_a'),
+              'Horodatage collecte'
+          )
+
+          require(
+              abs((now - collected).total_seconds())
+              <= 600,
+              'Collecte hors tolerance de 10 minutes'
+          )
+
+          require(
+              collected.astimezone(
+                  ZoneInfo('Europe/Paris')
+              ).date() == paris_date,
+              'Date locale de collecte incoherente'
+          )
+
+          courses = data.get('courses')
+
+          require(
+              isinstance(courses, list),
+              'Courses invalides'
+          )
+
+          require(
+              len(courses) <= 150,
+              'Plus de 150 courses'
+          )
+
+          counts = {
+              'OK': 0,
+              'PARTIEL': 0,
+              'REFUSE': 0,
+          }
+
+          ids = set()
 
           for course in courses:
-              exiger(isinstance(course, dict), "Course invalide")
+              require(
+                  isinstance(course, dict),
+                  'Course non objet'
+              )
 
-              identifiant = course.get("id")
-              exiger(
-                  isinstance(identifiant, str)
+              cid = course.get('id')
+
+              require(
+                  isinstance(cid, str)
                   and re.fullmatch(
-                      r"R[1-9]\d*C[1-9]\d*", identifiant
+                      r'R[1-9]\d*C[1-9]\d*',
+                      cid
                   ) is not None,
-                  "Identifiant course invalide"
+                  'Identifiant course invalide'
               )
-              exiger(
-                  identifiant not in identifiants,
-                  "Course dupliquee"
+
+              require(
+                  cid not in ids,
+                  f'Course dupliquee : {cid}'
               )
-              identifiants.add(identifiant)
 
-              statut = course.get("statut")
-              exiger(statut in compteurs, "Statut inconnu")
-              compteurs[statut] += 1
+              ids.add(cid)
 
-              if statut != "OK":
-                  raison = course.get("raison")
-                  exiger(
-                      isinstance(raison, str)
-                      and bool(raison.strip()),
-                      "Motif de refus ou statut partiel absent"
+              status = course.get('statut')
+
+              require(
+                  isinstance(status, str)
+                  and status in counts,
+                  f'Statut inconnu : {cid}'
+              )
+
+              counts[status] += 1
+
+              if status != 'OK':
+                  reason = course.get('raison')
+
+                  require(
+                      isinstance(reason, str)
+                      and bool(reason.strip()),
+                      f'Motif absent : {cid}'
                   )
                   continue
 
-              for cle in (
-                  "localisation_france_verifiee",
-                  "depart_programme_verifie",
-                  "partants_verifies",
+              for key in (
+                  'localisation_france_verifiee',
+                  'depart_programme_verifie',
+                  'partants_verifies',
               ):
-                  exiger(
-                      course.get(cle) is True,
-                      f"Verification absente : {cle}"
+                  require(
+                      course.get(key) is True,
+                      f'{cid} : {key} non verifie'
                   )
 
-              exiger(
-                  course.get("depart_effectif_verifie") is False,
-                  "Depart effectif non prouve"
+              require(
+                  course.get(
+                      'depart_effectif_verifie'
+                  ) is False,
+                  f'{cid} : depart effectif non prouve'
               )
 
-              depart = course.get("depart")
-              exiger(
-                  isinstance(depart, str),
-                  "Horaire de depart absent"
-              )
-              dt = datetime.fromisoformat(
-                  depart.replace("Z", "+00:00")
-              )
-              exiger(
-                  dt.tzinfo is not None
-                  and dt.utcoffset() is not None,
-                  "Depart sans fuseau"
-              )
-              exiger(
-                  dt.astimezone(
-                      ZoneInfo("Europe/Paris")
-                  ).date() == date_paris,
-                  "Date de depart incoherente"
+              departure = aware_datetime(
+                  course.get('depart'),
+                  f'{cid} depart'
               )
 
-              actifs = course.get("partants")
-              np = course.get("non_partants")
-              nombre = course.get("nombre_partants")
-
-              exiger(isinstance(actifs, list), "Partants invalides")
-              exiger(isinstance(np, list), "Non-partants invalides")
-              exiger(
-                  type(nombre) is int
-                  and nombre > 0
-                  and nombre == len(actifs),
-                  "Nombre de partants incoherent"
+              require(
+                  departure.astimezone(
+                      ZoneInfo('Europe/Paris')
+                  ).date() == paris_date,
+                  f'{cid} : date depart incoherente'
               )
 
-              numeros = set()
+              starters = course.get('partants')
+              nonstarters = course.get('non_partants')
+              total = course.get('nombre_partants')
 
-              for liste, attendu in ((actifs, False), (np, True)):
-                  for cheval in liste:
-                      exiger(
-                          isinstance(cheval, dict),
-                          "Cheval invalide"
+              require(
+                  isinstance(starters, list),
+                  f'{cid} : partants invalides'
+              )
+
+              require(
+                  isinstance(nonstarters, list),
+                  f'{cid} : non-partants invalides'
+              )
+
+              require(
+                  type(total) is int
+                  and total > 0
+                  and total == len(starters),
+                  f'{cid} : nombre partants incoherent'
+              )
+
+              numbers = set()
+
+              for horses, expected_np in (
+                  (starters, False),
+                  (nonstarters, True),
+              ):
+                  for horse in horses:
+                      require(
+                          isinstance(horse, dict),
+                          f'{cid} : cheval invalide'
                       )
 
-                      numero = cheval.get("numero")
-                      nom = cheval.get("nom")
+                      number = horse.get('numero')
 
-                      exiger(
-                          type(numero) is int and numero > 0,
-                          "Numero cheval invalide"
-                      )
-                      exiger(
-                          numero not in numeros,
-                          "Numero cheval duplique"
-                      )
-                      numeros.add(numero)
-
-                      exiger(
-                          isinstance(nom, str)
-                          and bool(nom.strip()),
-                          "Nom cheval absent"
-                      )
-                      exiger(
-                          cheval.get("non_partant") is attendu,
-                          "Statut partant incoherent"
+                      require(
+                          type(number) is int
+                          and number > 0,
+                          f'{cid} : numero invalide'
                       )
 
-          correspondances = {
-              "OK": "courses_france_verifiees",
-              "PARTIEL": "courses_partielles",
-              "REFUSE": "courses_refusees",
+                      require(
+                          number not in numbers,
+                          f'{cid} : numero duplique'
+                      )
+
+                      numbers.add(number)
+
+                      name = horse.get('nom')
+
+                      require(
+                          isinstance(name, str)
+                          and bool(name.strip()),
+                          f'{cid} : nom cheval absent'
+                      )
+
+                      require(
+                          horse.get('non_partant')
+                          is expected_np,
+                          f'{cid} : statut cheval incoherent'
+                      )
+
+          correspondence = {
+              'OK': 'courses_france_verifiees',
+              'PARTIEL': 'courses_partielles',
+              'REFUSE': 'courses_refusees',
           }
 
-          for statut, cle in correspondances.items():
-              exiger(
-                  type(data.get(cle)) is int
-                  and data[cle] == compteurs[statut],
-                  f"Compteur incoherent : {cle}"
+          for status, key in correspondence.items():
+              require(
+                  type(data.get(key)) is int
+                  and data[key] == counts[status],
+                  f'Compteur incoherent : {key}'
               )
 
-          print("X1000 V2.5 : RAPPORT CONFORME")
-          print("Courses controlees :", len(courses))
-          print("France OK :", compteurs["OK"])
-          print("Partielles :", compteurs["PARTIEL"])
-          print("Refusees :", compteurs["REFUSE"])
-          print("Publication : NON")
-          print("FIGE : NON")
-          print("M1-M5 : NON ALIMENTES")
+          print('X1000 V2.5 : RAPPORT CONFORME')
+          print('Courses controlees :', len(courses))
+          print('France OK :', counts['OK'])
+          print('Partielles :', counts['PARTIEL'])
+          print('Refusees :', counts['REFUSE'])
+          print('Publication : NON')
+          print('FIGE : NON')
+          print('M1-M5 : NON ALIMENTES')
           PY
 
       - name: Bilan GitHub
@@ -331,16 +423,16 @@ jobs:
         shell: bash
         run: |
           {
-            echo "## X1000 V2.5"
-            echo ""
-            echo "- Rapport technique : conforme"
-            echo "- Branche securisee : OK"
-            echo "- Localisation et partants : controles selon rapport"
-            echo "- Publication : aucune"
-            echo "- FIGE : aucun"
-            echo "- Transmission M1-M5 : aucune"
-            echo "- Archives : non modifiees"
-            echo ""
-            echo "Aucune validation sportive effectuee."
-            echo "Consulter les journaux pour les compteurs."
+            echo '## X1000 V2.5'
+            echo ''
+            echo '- Rapport technique : conforme au schema controle'
+            echo '- Branche securisee : OK'
+            echo '- Localisation et partants : controles selon rapport'
+            echo '- Publication : aucune par ce workflow'
+            echo '- FIGE : aucun par ce workflow'
+            echo '- Transmission M1-M5 : aucune par ce workflow'
+            echo '- Archives : non modifiees par ce workflow'
+            echo ''
+            echo 'Aucune validation sportive effectuee.'
+            echo 'Le rapport ne prouve pas independamment la source PMU.'
           } >> "$GITHUB_STEP_SUMMARY"
