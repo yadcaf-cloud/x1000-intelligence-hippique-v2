@@ -2,7 +2,6 @@ name: X1000 V2.4 - Audit collecte PMU reelle
 
 on:
   workflow_dispatch:
-
   push:
     branches:
       - feature/installation-x1000-v2
@@ -20,10 +19,7 @@ concurrency:
 jobs:
   audit-pmu:
     name: Audit PMU sans publication
-
-    if: >-
-      github.ref == 'refs/heads/feature/installation-x1000-v2'
-
+    if: github.ref == 'refs/heads/feature/installation-x1000-v2'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
@@ -34,17 +30,17 @@ jobs:
       PYTHONNOUSERSITE: "1"
 
     steps:
-      - name: Recuperer la branche securisee
+      - name: Recuperer branche securisee
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Installer Python 3.12
-        uses: actions/setup-python@v5
+      - name: Installer Python
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Verifier branche et fichier
+      - name: Verifier fichier et syntaxe
         shell: bash
         run: |
           set -euo pipefail
@@ -52,24 +48,19 @@ jobs:
           test "$GITHUB_REF" = \
             "refs/heads/feature/installation-x1000-v2"
 
-          test -f audit_collecte_pmu.py
-
           python - <<'PY'
           import ast
           from pathlib import Path
 
-          fichier = Path("audit_collecte_pmu.py")
-
-          source = fichier.read_text(
-              encoding="utf-8"
-          )
+          path = Path("audit_collecte_pmu.py")
+          if not path.is_file():
+              raise SystemExit("Script audit absent")
 
           ast.parse(
-              source,
-              filename=str(fichier)
+              path.read_text(encoding="utf-8-sig"),
+              filename=str(path)
           )
-
-          print("Syntaxe Python valide")
+          print("Syntaxe audit : OK")
           PY
 
       - name: Executer audit PMU reel
@@ -80,7 +71,7 @@ jobs:
           python audit_collecte_pmu.py \
             > "$RUNNER_TEMP/audit-pmu.json"
 
-      - name: Valider rapport de collecte
+      - name: Verifier rapport et securite
         shell: bash
         run: |
           set -euo pipefail
@@ -89,192 +80,171 @@ jobs:
           import json
           import os
           import re
-
-          from datetime import datetime
+          from datetime import datetime, timezone
           from pathlib import Path
           from zoneinfo import ZoneInfo
 
-          def refuser_doublons(paires):
-              resultat = {}
-
-              for cle, valeur in paires:
-                  if cle in resultat:
-                      raise ValueError(
-                          f"Cle dupliquee : {cle}"
-                      )
-                  resultat[cle] = valeur
-
-              return resultat
-
-          def refuser_constante(valeur):
-              raise ValueError(
-                  f"Constante interdite : {valeur}"
-              )
-
-          def verifier(condition, message):
+          def require(condition, message):
               if not condition:
                   raise ValueError(message)
 
-          chemin = (
+          def unique_pairs(pairs):
+              result = {}
+              for key, value in pairs:
+                  require(
+                      key not in result,
+                      f"Cle dupliquee : {key}"
+                  )
+                  result[key] = value
+              return result
+
+          def invalid_constant(value):
+              raise ValueError(
+                  f"Constante JSON interdite : {value}"
+              )
+
+          report = (
               Path(os.environ["RUNNER_TEMP"])
               / "audit-pmu.json"
           )
 
-          verifier(
-              chemin.is_file(),
-              "Rapport absent"
-          )
-
-          verifier(
-              0 < chemin.stat().st_size <= 65536,
-              "Taille du rapport invalide"
+          require(report.is_file(), "Rapport absent")
+          require(
+              0 < report.stat().st_size <= 65536,
+              "Taille rapport invalide"
           )
 
           data = json.loads(
-              chemin.read_text(encoding="utf-8"),
-              object_pairs_hook=refuser_doublons,
-              parse_constant=refuser_constante,
+              report.read_text(encoding="utf-8-sig"),
+              object_pairs_hook=unique_pairs,
+              parse_constant=invalid_constant
           )
 
-          verifier(
-              isinstance(data, dict),
-              "Rapport non objet"
-          )
-
-          verifier(
-              data.get("version") == "2.4",
-              "Version incorrecte"
-          )
-
-          verifier(
+          require(isinstance(data, dict), "Objet attendu")
+          require(data.get("version") == "2.4", "Version")
+          require(
               data.get("statut")
               == "AUDIT_SEUL_SANS_PUBLICATION",
               "Statut incorrect"
           )
 
-          for cle in (
+          for key in (
               "publication",
               "fige",
-              "validation_sportive",
+              "validation_sportive"
           ):
-              verifier(
-                  data.get(cle) is False,
-                  f"{cle} doit etre false"
+              require(
+                  data.get(key) is False,
+                  f"{key} doit etre false"
               )
 
-          for cle in (
+          for key in (
               "courses_france_verifiees",
-              "courses_transmises_moteurs",
+              "courses_transmises_moteurs"
           ):
-              verifier(
-                  type(data.get(cle)) is int
-                  and data[cle] == 0,
-                  f"{cle} doit etre zero"
+              require(
+                  type(data.get(key)) is int
+                  and data[key] == 0,
+                  f"{key} doit etre zero"
               )
 
-          for cle in (
-              "reunions",
-              "courses_brutes",
-          ):
-              valeur = data.get(cle)
-
-              verifier(
-                  type(valeur) is int
-                  and valeur >= 0,
-                  f"{cle} invalide"
+          for key in ("reunions", "courses_brutes"):
+              require(
+                  type(data.get(key)) is int
+                  and data[key] >= 0,
+                  f"Compteur invalide : {key}"
               )
 
-          verifier(
+          require(
               isinstance(data.get("raison"), str)
               and bool(data["raison"].strip()),
-              "Raison manquante"
+              "Raison absente"
           )
 
-          date_pmu = datetime.now(
-              ZoneInfo("Europe/Paris")
-          ).date()
+          now = datetime.now(timezone.utc)
+          paris = ZoneInfo("Europe/Paris")
+          today = now.astimezone(paris).date()
 
-          verifier(
-              data.get("date")
-              == date_pmu.isoformat(),
-              "Date PMU incorrecte"
+          require(
+              data.get("date") == today.isoformat(),
+              "Date incorrecte"
           )
 
-          source_attendue = (
+          expected = (
               "https://online.turfinfo.api.pmu.fr"
               "/rest/client/1/programme/"
-              + date_pmu.strftime("%d%m%Y")
+              + today.strftime("%d%m%Y")
           )
 
-          verifier(
-              data.get("source") == source_attendue,
-              "Source PMU incorrecte"
+          require(
+              data.get("source") == expected,
+              "URL source incorrecte"
           )
 
-          empreinte = data.get("source_sha256")
-
-          verifier(
-              isinstance(empreinte, str)
+          digest = data.get("source_sha256")
+          require(
+              isinstance(digest, str)
               and re.fullmatch(
-                  r"[0-9a-f]{64}",
-                  empreinte
+                  r"[0-9a-f]{64}", digest
               ) is not None,
-              "Empreinte SHA-256 invalide"
+              "SHA256 invalide"
           )
 
-          collecte = data.get("collecte_a")
-
-          verifier(
-              isinstance(collecte, str),
+          collected = data.get("collecte_a")
+          require(
+              isinstance(collected, str),
               "Horodatage absent"
           )
 
-          horodatage = datetime.fromisoformat(
-              collecte.replace("Z", "+00:00")
+          timestamp = datetime.fromisoformat(
+              collected.replace("Z", "+00:00")
           )
 
-          verifier(
-              horodatage.tzinfo is not None
-              and horodatage.utcoffset()
-              is not None,
-              "Horodatage sans fuseau"
+          require(
+              timestamp.tzinfo is not None
+              and timestamp.utcoffset() is not None,
+              "Fuseau absent"
           )
 
-          verifier(
-              abs(
-                  (
-                      datetime.now(
-                          horodatage.tzinfo
-                      ) - horodatage
-                  ).total_seconds()
-              ) <= 600,
-              "Horodatage hors tolerance"
+          require(
+              abs((now - timestamp).total_seconds())
+              <= 600,
+              "Collecte hors tolerance"
           )
 
-          print("AUDIT X1000 V2.4 CONFORME")
-          print("Source PMU controlee")
-          print("Structure du rapport valide")
-          print("Aucune validation sportive")
-          print("Aucune transmission M1-M5")
-          print("Aucune publication")
+          require(
+              timestamp.astimezone(paris).date()
+              == today,
+              "Date locale incoherente"
+          )
+
+          print("X1000 V2.4 : AUDIT CONFORME")
+          print("Structure du rapport : OK")
+          print("Publication : NON")
+          print("FIGE : NON")
+          print("Validation sportive : NON")
+          print("M1-M5 : NON ALIMENTES")
+          print(
+              "Source declaree et empreinte "
+              "controlees selon le rapport"
+          )
           PY
 
       - name: Bilan de securite
         if: success()
         shell: bash
         run: |
-          set -euo pipefail
-
           {
             echo "## X1000 V2.4 - Audit PMU"
             echo ""
-            echo "- Audit technique : reussi"
-            echo "- Source : PMU"
-            echo "- Donnees : brutes uniquement"
+            echo "- Audit technique : conforme"
+            echo "- Rapport JSON : controle"
+            echo "- Empreinte SHA256 : format valide"
             echo "- M1-M5 : non alimentes"
             echo "- FIGE : aucun"
             echo "- Publication : aucune"
-            echo "- Archives : non modifiees"
+            echo "- Archives : non modifiees par le workflow"
             echo ""
-            echo "Validation sportive non effectuee."
+            echo "Aucune validation sportive."
+            echo "Aucune preuve independante de source."
           } >> "$GITHUB_STEP_SUMMARY"
