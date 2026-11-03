@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#071521">
+<meta name="description" content="X1000 Intelligence Hippique V2 — moteurs M1 à M5, courses françaises, sélections, FIGÉS et audits.">
+<title>🇸🇳🧠 X1000 — Intelligence Hippique V2</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg:#071521;
+  --panel:#102838;
+  --panel2:#173849;
+  --border:#315263;
+  --text:#f0f7f5;
+  --muted:#b7cbd0;
+  --gold:#efce7e;
+  --green:#82e1b6;
+  --blue:#a7dfff;
+  --red:#ffaaaa;
+}
+* { box-sizing:border-box; }
+body {
+  margin:0;
+  background:radial-gradient(ellipse at top,#12354a 0%,var(--bg) 58%);
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  color:var(--text);
+  line-height:1.5;
+}
+header,main,footer {
+  max-width:1180px;
+  margin:auto;
+  padding:22px;
+}
+header { padding-top:44px; }
+h1 {
+  font-size:clamp(1.8rem,5vw,3.2rem);
+  line-height:1.15;
+  margin:12px 0;
+}
+h2 { font-size:1.25rem; margin:0 0 14px; }
+.eyebrow {
+  color:var(--gold);
+  font-weight:800;
+  letter-spacing:.12em;
+  font-size:.82rem;
+}
+.subtitle { color:var(--muted); max-width:780px; }
+.toolbar {
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px;
+  align-items:center;
+  margin-top:22px;
+}
+button,input { font:inherit; border-radius:10px; }
+button {
+  background:var(--gold);
+  color:#101e29;
+  border:0;
+  padding:11px 18px;
+  font-weight:800;
+  cursor:pointer;
+}
+button:disabled { opacity:.6; cursor:wait; }
+button:focus-visible,input:focus-visible {
+  outline:3px solid var(--blue);
+  outline-offset:2px;
+}
+input {
+  background:#071b29;
+  color:var(--text);
+  border:1px solid var(--border);
+  padding:10px;
+  min-width:min(100%,300px);
+}
+.status {
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  color:var(--muted);
+}
+.dot {
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  background:#b6a777;
+}
+.dot.ok { background:var(--green); }
+.dot.error { background:var(--red); }
+.dot.partial { background:var(--gold); }
+.grid {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+  gap:16px;
+}
+.panel {
+  background:linear-gradient(160deg,var(--panel),#0c2230);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:20px;
+  min-width:0;
+}
+.panel p { color:var(--muted); }
+.metric {
+  font-size:2rem;
+  font-weight:850;
+  color:var(--gold);
+}
+.tag {
+  display:inline-block;
+  padding:4px 10px;
+  border-radius:999px;
+  border:1px solid var(--border);
+  font-size:.78rem;
+  color:var(--blue);
+}
+section { margin:22px 0; }
+.engine { border-left:3px solid var(--gold); }
+.engine h3 { margin:0 0 8px; }
+.empty {
+  padding:18px;
+  border:1px dashed var(--border);
+  border-radius:10px;
+  color:var(--muted);
+}
+.table-wrap { overflow-x:auto; }
+table {
+  border-collapse:collapse;
+  width:100%;
+  min-width:520px;
+}
+th,td {
+  padding:12px;
+  text-align:left;
+  border-bottom:1px solid var(--border);
+  vertical-align:top;
+  overflow-wrap:anywhere;
+}
+th { color:var(--gold); font-size:.85rem; }
+.notice {
+  border-left:3px solid var(--blue);
+  padding:12px 16px;
+  background:#0e2b3d;
+  border-radius:8px;
+  color:var(--muted);
+}
+pre {
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  font-size:.9rem;
+  color:var(--muted);
+}
+footer {
+  font-size:.85rem;
+  color:var(--muted);
+  padding-bottom:44px;
+}
+small { color:var(--muted); }
+code { color:var(--blue); }
+</style>
+</head>
+
+<body>
+
+<header>
+<div class="eyebrow">🇸🇳 🧠 🇫🇷 · X1000 V2</div>
+
+<h1>
+Intelligence Hippique<br>
+Tableau de bord
+</h1>
+
+<p class="subtitle">
+Consultation des courses PMU disputées en France,
+des décisions indépendantes M1 à M5,
+des FIGÉS avant départ et des audits fondés
+exclusivement sur des résultats officiels vérifiés.
+</p>
+
+<div class="toolbar">
+<label for="api">Adresse API</label>
+<input
+  id="api"
+  type="url"
+  placeholder="https://api.exemple.fr"
+  autocomplete="url"
+>
+<button id="refresh" type="button">
+Actualiser les données
+</button>
+<span class="status" role="status" aria-live="polite">
+<span id="dot" class="dot"></span>
+<span id="connection">En attente</span>
+</span>
+</div>
+
+<p><small>
+Sur GitHub Pages, renseignez l'adresse HTTPS
+d'un serveur API Python accessible.
+Cette interface fonctionne en lecture seule.
+</small></p>
+</header>
+
+<main>
+
+<section class="grid" aria-label="Indicateurs">
+<article class="panel">
+<div class="tag">Courses</div>
+<div class="metric" id="count-courses">—</div>
+<p>Courses disponibles</p>
+</article>
+
+<article class="panel">
+<div class="tag">Sélections</div>
+<div class="metric" id="count-selections">—</div>
+<p>Décisions enregistrées</p>
+</article>
+
+<article class="panel">
+<div class="tag">FIGÉS</div>
+<div class="metric" id="count-figes">—</div>
+<p>Versions enregistrées</p>
+</article>
+
+<article class="panel">
+<div class="tag">Audits</div>
+<div class="metric" id="count-audits">—</div>
+<p>Audits disponibles</p>
+</article>
+</section>
+
+<section>
+<h2>Les cinq moteurs indépendants</h2>
+<div class="grid" id="engines">
+
+<article class="panel engine">
+<h3>M1 · Statistiques</h3>
+<p>Performances, chronos, régularité et opposition.</p>
+<span class="tag">Non renseigné</span>
+</article>
+
+<article class="panel engine">
+<h3>M2 · Décision autonome</h3>
+<p>Forces, faiblesses et classement indépendant.</p>
+<span class="tag">Non renseigné</span>
+</article>
+
+<article class="panel engine">
+<h3>M3 · Aptitudes</h3>
+<p>Jockey, driver, terrain et parcours.</p>
+<span class="tag">Non renseigné</span>
+</article>
+
+<article class="panel engine">
+<h3>M4 · Endurance</h3>
+<p>Tenue, conditions de course et entourage.</p>
+<span class="tag">Non renseigné</span>
+</article>
+
+<article class="panel engine">
+<h3>M5 · Outsiders</h3>
+<p>Profils négligés et vigilance sur les faux favoris.</p>
+<span class="tag">Non renseigné</span>
+</article>
+
+</div>
+</section>
+
+<section class="panel">
+<h2>Courses françaises</h2>
+<div id="courses" class="empty">
+Aucune donnée chargée.
+</div>
+</section>
+
+<section class="panel">
+<h2>Sélections M1–M5</h2>
+<div id="selections" class="empty">
+Aucune sélection chargée.
+</div>
+</section>
+
+<section class="panel">
+<h2>FIGÉS avant départ</h2>
+<p>
+Les FIGÉS restent consultables sans modification.
+Un nouveau FIGÉ ne peut être créé que par
+les moteurs autorisés, avant le départ,
+avec conservation des versions précédentes.
+</p>
+<div id="figes" class="empty">
+Aucun FIGÉ chargé.
+</div>
+</section>
+
+<section class="panel">
+<h2>Audits et résultats officiels</h2>
+<div id="audits" class="empty">
+Aucun audit chargé.
+</div>
+</section>
+
+<section class="panel">
+<h2>Diagnostic technique</h2>
+<div id="diagnostic" class="empty">
+Diagnostic non chargé.
+</div>
+
+<p class="notice">
+Interface strictement en lecture seule.
+Aucune collecte PMU automatique,
+aucune publication de pronostics
+et aucune validation officielle automatique.
+</p>
+</section>
+
+</main>
+
+<footer>
+X1000 Intelligence Hippique V2 ·
+Heure de Paris :
+<span id="clock">—</span>
+</footer>
+
+<script>
+'use strict';
+
+const $ = id => document.getElementById(id);
+
+const endpoints = [
+  'status',
+  'courses',
+  'selections',
+  'figes',
+  'audits',
+  'diagnostic'
+];
+
+let activeController = null;
+
+function getArray(payload,key) {
+  if (Array.isArray(payload)) return payload;
+
+  if (payload && typeof payload === 'object') {
+    if (Array.isArray(payload[key])) return payload[key];
+    if (Array.isArray(payload.items)) return payload.items;
+    if (Array.isArray(payload.data)) return payload.data;
+  }
+
+  return null;
+}
+
+function displayValue(value) {
+  if (value === null || value === undefined) return '—';
+
+  if (typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+
+  return String(value);
+}
+
+function renderRows(target,items,fields) {
+  const root = $(target);
+  root.replaceChildren();
+
+  if (!items || !items.length) {
+    root.className = 'empty';
+    root.textContent = items
+      ? 'Aucun enregistrement disponible.'
+      : 'Format JSON non reconnu.';
+    return;
+  }
+
+  root.className = 'table-wrap';
+
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+
+  fields.forEach(([label]) => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    headRow.append(th);
+  });
+
+  thead.append(headRow);
+  table.append(thead);
+
+  const tbody = document.createElement('tbody');
+
+  items.slice(0,100).forEach(item => {
+    const tr = document.createElement('tr');
+
+    fields.forEach(([,keys]) => {
+      const td = document.createElement('td');
+
+      const key = keys.find(k =>
+        item &&
+        typeof item === 'object' &&
+        Object.prototype.hasOwnProperty.call(item,k)
+      );
+
+      td.textContent = displayValue(
+        key === undefined ? null : item[key]
+      );
+
+      tr.append(td);
+    });
+
+    tbody.append(tr);
+  });
+
+  table.append(tbody);
+  root.append(table);
+
+  if (items.length > 100) {
+    const p = document.createElement('p');
+    p.textContent =
+      `Affichage limité à 100 sur ${items.length} enregistrements.`;
+    root.append(p);
+  }
+}
+
+function renderObject(target,payload) {
+  const root = $(target);
+  root.className = '';
+  root.replaceChildren();
+
+  const pre = document.createElement('pre');
+  pre.textContent = JSON.stringify(payload,null,2);
+  root.append(pre);
+}
+
+function resetEngines() {
+  document.querySelectorAll('#engines .tag')
+    .forEach(tag => {
+      tag.textContent = 'Non renseigné';
+    });
+}
+
+function updateEngines(status) {
+  resetEngines();
+
+  if (!status || typeof status !== 'object') return;
+
+  const engines = Array.isArray(status.moteurs)
+    ? status.moteurs
+    : Array.isArray(status.engines)
+      ? status.engines
+      : [];
+
+  for (let i=1;i<=5;i++) {
+    const engine = engines.find(item => {
+      if (!item || typeof item !== 'object') return false;
+
+      const id = String(
+        item.id ?? item.nom ?? item.moteur ?? item.engine ?? ''
+      ).toUpperCase();
+
+      return id === `M${i}`;
+    });
+
+    if (!engine) continue;
+
+    const card = $('engines').children[i-1];
+    const tag = card.querySelector('.tag');
+
+    tag.textContent = displayValue(
+      engine.statut ?? engine.status ?? 'État non renseigné'
+    );
+  }
+}
+
+function getBaseUrl() {
+  const raw = $('api').value.trim();
+
+  if (!raw) {
+    if (
+      location.hostname.endsWith('.github.io')
+    ) {
+      throw new Error(
+        'Renseignez une API HTTPS : GitHub Pages ne lance pas Python.'
+      );
+    }
+
+    if (!/^https?:$/.test(location.protocol)) {
+      throw new Error(
+        'Ouvrez la page depuis un serveur HTTP ou HTTPS.'
+      );
+    }
+
+    return location.origin;
+  }
+
+  const url = new URL(raw);
+
+  if (
+    url.protocol !== 'https:' &&
+    !(
+      url.protocol === 'http:' &&
+      ['localhost','127.0.0.1'].includes(url.hostname)
+    )
+  ) {
+    throw new Error(
+      'Adresse HTTPS requise, sauf serveur local.'
+    );
+  }
+
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error(
+      'Utilisez une adresse API sans identifiants ni paramètres.'
+    );
+  }
+
+  return url.origin + url.pathname.replace(/\/+$/,'');
+}
+
+async function fetchJson(url,signal) {
+  const response = await fetch(url,{
+    method:'GET',
+    headers:{Accept:'application/json'},
+    cache:'no-store',
+    signal
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function updateClock() {
+  $('clock').textContent = new Date().toLocaleString(
+    'fr-FR',{
+      timeZone:'Europe/Paris',
+      dateStyle:'short',
+      timeStyle:'medium'
+    }
+  );
+}
+
+async function load() {
+  if (activeController) {
+    activeController.abort();
+  }
+
+  const controller = new AbortController();
+  activeController = controller;
+
+  const button = $('refresh');
+  button.disabled = true;
+
+  $('connection').textContent = 'Connexion en cours…';
+  $('dot').className = 'dot';
+
+  try {
+    const base = getBaseUrl();
+
+    const results = await Promise.all(
+      endpoints.map(async key => {
+        try {
+          const timeout = AbortSignal.timeout(10000);
+
+          const signal = AbortSignal.any([
+            controller.signal,
+            timeout
+          ]);
+
+          const data = await fetchJson(
+            `${base}/api/${key}`,
+            signal
+          );
+
+          return {key,data,error:null};
+        } catch(error) {
+          return {
+            key,
+            data:null,
+            error:error.message
+          };
+        }
+      })
+    );
+
+    if (controller.signal.aborted) return;
+
+    const data = Object.fromEntries(
+      results.map(result => [
+        result.key,
+        result.data
+      ])
+    );
+
+    const successes = results.filter(
+      result => result.error === null
+    ).length;
+
+    $('connection').textContent =
+      successes === endpoints.length
+        ? 'API connectée'
+        : successes > 0
+          ? `API partielle (${successes}/${endpoints.length})`
+          : 'API indisponible';
+
+    $('dot').className =
+      'dot ' + (
+        successes === endpoints.length
+          ? 'ok'
+          : successes > 0
+            ? 'partial'
+            : 'error'
+      );
+
+    const fields = {
+      courses:[
+        ['Course',['id','course_id','cid']],
+        ['Hippodrome',['hippodrome','lieu']],
+        ['Départ',['depart','heure_depart','date_depart']],
+        ['Statut',['statut','status']]
+      ],
+      selections:[
+        ['Course',['course_id','cid','id_course']],
+        ['Moteur',['moteur','engine']],
+        ['Classement',['ranking','classement','positions']],
+        ['Analyse',['analysis','analyse']]
+      ],
+      figes:[
+        ['Course',['course_id','cid']],
+        ['Version',['version']],
+        ['Statut',['statut','status']],
+        ['Horodatage',['fige_a','created_at','verifie_a']]
+      ],
+      audits:[
+        ['Course',['course_id','cid']],
+        ['Arrivée',['arrival','arrivee']],
+        ['Source officielle',['source_officielle','source']],
+        ['Vérifié',['resultat_verifie','verified']]
+      ]
+    };
+
+    for (const key of [
+      'courses','selections','figes','audits'
+    ]) {
+      const result = results.find(
+        item => item.key === key
+      );
+
+      if (result.error !== null) {
+        $('count-'+key).textContent = '—';
+        $(key).className = 'empty';
+        $(key).textContent =
+          `Source inaccessible : ${result.error}`;
+        continue;
+      }
+
+      const items = getArray(result.data,key);
+
+      $('count-'+key).textContent =
+        items ? String(items.length) : '—';
+
+      renderRows(key,items,fields[key]);
+    }
+
+    updateEngines(data.status);
+
+    if (data.diagnostic !== null) {
+      renderObject('diagnostic',data.diagnostic);
+    } else if (data.status !== null) {
+      renderObject('diagnostic',data.status);
+    } else {
+      $('diagnostic').className = 'empty';
+      $('diagnostic').textContent =
+        'Aucun diagnostic accessible.';
+    }
+
+    if (!successes) {
+      $('diagnostic').className = 'empty';
+      $('diagnostic').textContent =
+        'API inaccessible. Vérifiez le serveur Python, ' +
+        'les routes /api/, HTTPS et les autorisations CORS.';
+    }
+
+  } catch(error) {
+    if (!controller.signal.aborted) {
+      $('connection').textContent = error.message;
+      $('dot').className = 'dot error';
+
+      resetEngines();
+
+      for (const key of [
+        'courses','selections','figes','audits'
+      ]) {
+        $('count-'+key).textContent = '—';
+        $(key).className = 'empty';
+        $(key).textContent = 'Données indisponibles.';
+      }
+
+      $('diagnostic').className = 'empty';
+      $('diagnostic').textContent = error.message;
+    }
+  } finally {
+    if (activeController === controller) {
+      activeController = null;
+      button.disabled = false;
+    }
+  }
+}
+
+$('refresh').addEventListener('click',load);
+
+updateClock();
+setInterval(updateClock,1000);
+
+load();
+</script>
+
+</body>
+</html>
