@@ -1,15 +1,13 @@
-
 name: X1000 V2.5 - Validation courses PMU France
 
 on:
   workflow_dispatch:
-
   push:
     branches:
       - feature/installation-x1000-v2
     paths:
       - validation_courses_pmu_v25.py
-      - audit_collecte_pmu.py
+      - courses.json
       - .github/workflows/validation-courses-pmu-v25.yml
 
 permissions:
@@ -28,9 +26,9 @@ jobs:
 
     env:
       TZ: Europe/Paris
-      PYTHONDONTWRITEBYTECODE: '1'
-      PYTHONUNBUFFERED: '1'
-      PYTHONNOUSERSITE: '1'
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONNOUSERSITE: "1"
 
     steps:
       - name: Recuperer branche securisee
@@ -38,53 +36,73 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Installer Python 3.12
+      - name: Installer Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
-      - name: Verifier branche fichiers et syntaxe
+      - name: Verifier branche et syntaxe
         shell: bash
         run: |
           set -euo pipefail
 
           test "$GITHUB_REF" = \
-            'refs/heads/feature/installation-x1000-v2'
+            "refs/heads/feature/installation-x1000-v2"
 
           python - <<'PY'
           import ast
           from pathlib import Path
 
-          for name in (
-              'audit_collecte_pmu.py',
-              'validation_courses_pmu_v25.py',
-          ):
-              path = Path(name)
+          name = "validation_courses_pmu_v25.py"
+          path = Path(name)
 
-              if not path.is_file():
-                  raise SystemExit(
-                      f'ERREUR : fichier absent : {name}'
-                  )
-
-              ast.parse(
-                  path.read_text(encoding='utf-8'),
-                  filename=name,
+          if not path.is_file():
+              raise SystemExit(
+                  "ERREUR : script de validation absent"
               )
 
-              print(f'OK : {name}')
+          ast.parse(
+              path.read_text(encoding="utf-8-sig"),
+              filename=name
+          )
 
-          print('Syntaxe Python conforme')
+          print("Syntaxe Python : OK")
           PY
 
-      - name: Executer validation PMU
+      - name: Executer autotests V2.5
+        shell: bash
+        run: |
+          set -euo pipefail
+          python validation_courses_pmu_v25.py \
+            --self-test
+
+      - name: Verifier disponibilite des donnees
+        id: donnees
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -f courses.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "Fichier courses.json present"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AUCUNE DONNEE : courses.json absent"
+            echo "Aucune course inventee"
+          fi
+
+      - name: Executer validation des courses
+        if: steps.donnees.outputs.present == 'true'
         shell: bash
         run: |
           set -euo pipefail
 
           python validation_courses_pmu_v25.py \
-            > "$RUNNER_TEMP/validation-v25.json"
+            --input courses.json \
+            --output "$RUNNER_TEMP/validation-v25.json"
 
-      - name: Verifier rapport et securite
+      - name: Controler rapport V2.5
+        if: steps.donnees.outputs.present == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -92,11 +110,7 @@ jobs:
           python - <<'PY'
           import json
           import os
-          import re
-
-          from datetime import datetime, timezone
           from pathlib import Path
-          from zoneinfo import ZoneInfo
 
           def require(condition, message):
               if not condition:
@@ -104,335 +118,174 @@ jobs:
 
           def unique_pairs(pairs):
               result = {}
-
               for key, value in pairs:
                   require(
                       key not in result,
-                      f'Cle JSON dupliquee : {key}'
+                      f"Cle JSON dupliquee : {key}"
                   )
                   result[key] = value
-
               return result
 
           def invalid_constant(value):
               raise ValueError(
-                  f'Constante JSON interdite : {value}'
+                  f"Constante interdite : {value}"
               )
-
-          def aware_datetime(value, label):
-              require(
-                  isinstance(value, str),
-                  f'{label} absent'
-              )
-
-              try:
-                  dt = datetime.fromisoformat(
-                      value.replace('Z', '+00:00')
-                  )
-              except ValueError as exc:
-                  raise ValueError(
-                      f'{label} invalide'
-                  ) from exc
-
-              require(
-                  dt.tzinfo is not None
-                  and dt.utcoffset() is not None,
-                  f'{label} sans fuseau'
-              )
-
-              return dt
 
           report = (
-              Path(os.environ['RUNNER_TEMP'])
-              / 'validation-v25.json'
+              Path(os.environ["RUNNER_TEMP"])
+              / "validation-v25.json"
           )
 
           require(
               report.is_file(),
-              'Rapport JSON absent'
+              "Rapport absent"
           )
 
           require(
-              0 < report.stat().st_size <= 2_000_000,
-              'Taille rapport invalide'
+              0 < report.stat().st_size <= 2000000,
+              "Taille rapport invalide"
           )
 
           data = json.loads(
-              report.read_text(encoding='utf-8'),
+              report.read_text(encoding="utf-8-sig"),
               object_pairs_hook=unique_pairs,
-              parse_constant=invalid_constant,
+              parse_constant=invalid_constant
           )
 
           require(
               isinstance(data, dict),
-              'Rapport JSON non objet'
+              "Rapport non objet"
           )
 
           require(
-              data.get('version') == '2.5',
-              'Version invalide'
+              data.get("systeme") == "X1000 V2.5",
+              "Systeme incorrect"
           )
 
           require(
-              data.get('statut')
-              == 'VALIDATION_TECHNIQUE_SANS_PUBLICATION',
-              'Statut technique invalide'
+              data.get("mode")
+              == "VALIDATION_LOCALE_SANS_PUBLICATION",
+              "Mode incorrect"
           )
 
           for key in (
-              'publication',
-              'fige',
-              'validation_sportive',
-              'transmission_moteurs',
+              "validation_officielle",
+              "collecte_automatique",
+              "publication"
           ):
               require(
                   data.get(key) is False,
-                  f'Interdiction non respectee : {key}'
+                  f"{key} doit etre false"
               )
 
-          now = datetime.now(timezone.utc)
+          total = data.get("total")
+          valid = data.get("valides")
+          invalid = data.get("invalides")
+          results = data.get("resultats")
 
-          paris_date = now.astimezone(
-              ZoneInfo('Europe/Paris')
-          ).date()
-
-          require(
-              data.get('date') == paris_date.isoformat(),
-              'Date PMU incorrecte'
-          )
-
-          expected_source = (
-              'https://online.turfinfo.api.pmu.fr'
-              '/rest/client/1/programme/'
-              + paris_date.strftime('%d%m%Y')
-          )
-
-          require(
-              data.get('source') == expected_source,
-              'Source incorrecte'
-          )
-
-          digest = data.get('source_sha256')
+          for key, value in (
+              ("total", total),
+              ("valides", valid),
+              ("invalides", invalid)
+          ):
+              require(
+                  type(value) is int
+                  and value >= 0,
+                  f"Compteur invalide : {key}"
+              )
 
           require(
-              isinstance(digest, str)
-              and re.fullmatch(
-                  r'[0-9a-f]{64}', digest
-              ) is not None,
-              'Empreinte SHA256 invalide'
-          )
-
-          collected = aware_datetime(
-              data.get('collecte_a'),
-              'Horodatage collecte'
+              isinstance(results, list),
+              "Resultats invalides"
           )
 
           require(
-              abs((now - collected).total_seconds())
-              <= 600,
-              'Collecte hors tolerance de 10 minutes'
+              total == len(results),
+              "Nombre de resultats incoherent"
           )
 
           require(
-              collected.astimezone(
-                  ZoneInfo('Europe/Paris')
-              ).date() == paris_date,
-              'Date locale de collecte incoherente'
-          )
-
-          courses = data.get('courses')
-
-          require(
-              isinstance(courses, list),
-              'Courses invalides'
+              valid + invalid == total,
+              "Compteurs incoherents"
           )
 
           require(
-              len(courses) <= 150,
-              'Plus de 150 courses'
+              total > 0,
+              "Aucune course dans le rapport"
           )
 
-          counts = {
-              'OK': 0,
-              'PARTIEL': 0,
-              'REFUSE': 0,
-          }
+          require(
+              invalid == 0,
+              "Courses invalides detectees"
+          )
 
-          ids = set()
+          require(
+              data.get("statut") == "VALIDE",
+              "Statut non valide"
+          )
 
-          for course in courses:
+          for item in results:
               require(
-                  isinstance(course, dict),
-                  'Course non objet'
+                  isinstance(item, dict),
+                  "Resultat non objet"
               )
-
-              cid = course.get('id')
-
               require(
-                  isinstance(cid, str)
-                  and re.fullmatch(
-                      r'R[1-9]\d*C[1-9]\d*',
-                      cid
-                  ) is not None,
-                  'Identifiant course invalide'
+                  item.get("valide") is True,
+                  "Course invalide"
               )
-
               require(
-                  cid not in ids,
-                  f'Course dupliquee : {cid}'
+                  item.get("erreurs") == [],
+                  "Erreurs de validation presentes"
               )
 
-              ids.add(cid)
-
-              status = course.get('statut')
-
-              require(
-                  isinstance(status, str)
-                  and status in counts,
-                  f'Statut inconnu : {cid}'
-              )
-
-              counts[status] += 1
-
-              if status != 'OK':
-                  reason = course.get('raison')
-
-                  require(
-                      isinstance(reason, str)
-                      and bool(reason.strip()),
-                      f'Motif absent : {cid}'
-                  )
-                  continue
-
-              for key in (
-                  'localisation_france_verifiee',
-                  'depart_programme_verifie',
-                  'partants_verifies',
-              ):
-                  require(
-                      course.get(key) is True,
-                      f'{cid} : {key} non verifie'
-                  )
-
-              require(
-                  course.get(
-                      'depart_effectif_verifie'
-                  ) is False,
-                  f'{cid} : depart effectif non prouve'
-              )
-
-              departure = aware_datetime(
-                  course.get('depart'),
-                  f'{cid} depart'
-              )
-
-              require(
-                  departure.astimezone(
-                      ZoneInfo('Europe/Paris')
-                  ).date() == paris_date,
-                  f'{cid} : date depart incoherente'
-              )
-
-              starters = course.get('partants')
-              nonstarters = course.get('non_partants')
-              total = course.get('nombre_partants')
-
-              require(
-                  isinstance(starters, list),
-                  f'{cid} : partants invalides'
-              )
-
-              require(
-                  isinstance(nonstarters, list),
-                  f'{cid} : non-partants invalides'
-              )
-
-              require(
-                  type(total) is int
-                  and total > 0
-                  and total == len(starters),
-                  f'{cid} : nombre partants incoherent'
-              )
-
-              numbers = set()
-
-              for horses, expected_np in (
-                  (starters, False),
-                  (nonstarters, True),
-              ):
-                  for horse in horses:
-                      require(
-                          isinstance(horse, dict),
-                          f'{cid} : cheval invalide'
-                      )
-
-                      number = horse.get('numero')
-
-                      require(
-                          type(number) is int
-                          and number > 0,
-                          f'{cid} : numero invalide'
-                      )
-
-                      require(
-                          number not in numbers,
-                          f'{cid} : numero duplique'
-                      )
-
-                      numbers.add(number)
-
-                      name = horse.get('nom')
-
-                      require(
-                          isinstance(name, str)
-                          and bool(name.strip()),
-                          f'{cid} : nom cheval absent'
-                      )
-
-                      require(
-                          horse.get('non_partant')
-                          is expected_np,
-                          f'{cid} : statut cheval incoherent'
-                      )
-
-          correspondence = {
-              'OK': 'courses_france_verifiees',
-              'PARTIEL': 'courses_partielles',
-              'REFUSE': 'courses_refusees',
-          }
-
-          for status, key in correspondence.items():
-              require(
-                  type(data.get(key)) is int
-                  and data[key] == counts[status],
-                  f'Compteur incoherent : {key}'
-              )
-
-          print('X1000 V2.5 : RAPPORT CONFORME')
-          print('Courses controlees :', len(courses))
-          print('France OK :', counts['OK'])
-          print('Partielles :', counts['PARTIEL'])
-          print('Refusees :', counts['REFUSE'])
-          print('Publication : NON')
-          print('FIGE : NON')
-          print('M1-M5 : NON ALIMENTES')
+          print("X1000 V2.5 : RAPPORT CONFORME")
+          print("Courses analysees :", total)
+          print("Courses structurellement valides :", valid)
+          print("Validation officielle : NON")
+          print("Publication : NON")
           PY
+
+      - name: Verifier absence de modifications
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! git diff --quiet ||
+             ! git diff --cached --quiet; then
+            echo "::error::Fichiers suivis modifies"
+            exit 1
+          fi
+
+          echo "Fichiers suivis inchanges"
 
       - name: Bilan GitHub
         if: success()
         shell: bash
+        env:
+          DONNEES_PRESENTES: ${{ steps.donnees.outputs.present }}
         run: |
+          set -euo pipefail
+
           {
-            echo '## X1000 V2.5'
-            echo ''
-            echo '- Rapport technique : conforme au schema controle'
-            echo '- Branche securisee : OK'
-            echo '- Localisation et partants : controles selon rapport'
-            echo '- Publication : aucune par ce workflow'
-            echo '- FIGE : aucun par ce workflow'
-            echo '- Transmission M1-M5 : aucune par ce workflow'
-            echo '- Archives : non modifiees par ce workflow'
-            echo ''
-            echo 'Aucune validation sportive effectuee.'
-            echo 'Le rapport ne prouve pas independamment la source PMU.'
+            echo "## X1000 V2.5"
+            echo ""
+            echo "- Autotests Python : reussis"
+            echo "- Branche securisee : OK"
+            echo "- Publication : aucune"
+            echo "- FIGE : aucun par le workflow"
+            echo "- Transmission M1-M5 : aucune"
+            echo "- Archives : non modifiees"
+            echo ""
+            if [ "$DONNEES_PRESENTES" = "true" ]; then
+              echo "Validation structurelle : conforme"
+              echo "Donnees fournies : oui"
+            else
+              echo "Statut : AUCUNE DONNEE"
+              echo "courses.json absent"
+              echo "Aucune course validee"
+            fi
+            echo ""
+            echo "Aucune validation officielle."
+            echo "Aucune collecte automatique."
           } >> "$GITHUB_STEP_SUMMARY"
