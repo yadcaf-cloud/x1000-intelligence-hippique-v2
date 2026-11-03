@@ -1,0 +1,335 @@
+name: X1000 V2.5 - Validation courses PMU France
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - feature/installation-x1000-v2
+    paths:
+      - validation_courses_pmu_v25.py
+      - audit_collecte_pmu.py
+      - .github/workflows/validation-courses-pmu-v25.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x1000-v25-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validation:
+    name: Validation France sans publication
+
+    if: github.ref == 'refs/heads/feature/installation-x1000-v2'
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    env:
+      TZ: Europe/Paris
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONNOUSERSITE: "1"
+
+    steps:
+      - name: Recuperer branche securisee
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verifier fichiers et syntaxe
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          fichiers = (
+              "audit_collecte_pmu.py",
+              "validation_courses_pmu_v25.py",
+          )
+
+          for nom in fichiers:
+              chemin = Path(nom)
+
+              if not chemin.is_file():
+                  raise SystemExit(
+                      f"ERREUR : fichier absent : {nom}"
+                  )
+
+              source = chemin.read_text(
+                  encoding="utf-8"
+              )
+
+              ast.parse(source, filename=nom)
+              print(f"OK : {nom}")
+
+          print("Syntaxe Python validee")
+          PY
+
+      - name: Executer validation PMU
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python validation_courses_pmu_v25.py \
+            > "$RUNNER_TEMP/validation-v25.json"
+
+      - name: Verifier rapport et securite
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          chemin = (
+              Path(os.environ["RUNNER_TEMP"])
+              / "validation-v25.json"
+          )
+
+          def exiger(condition, message):
+              if not condition:
+                  raise ValueError(message)
+
+          exiger(
+              chemin.is_file(),
+              "Rapport JSON absent"
+          )
+
+          taille = chemin.stat().st_size
+
+          exiger(
+              0 < taille <= 2_000_000,
+              "Taille du rapport invalide"
+          )
+
+          def sans_doublons(paires):
+              resultat = {}
+
+              for cle, valeur in paires:
+                  if cle in resultat:
+                      raise ValueError(
+                          f"Cle JSON dupliquee : {cle}"
+                      )
+                  resultat[cle] = valeur
+
+              return resultat
+
+          def constante_interdite(valeur):
+              raise ValueError(
+                  f"Constante JSON interdite : {valeur}"
+              )
+
+          data = json.loads(
+              chemin.read_text(encoding="utf-8"),
+              object_pairs_hook=sans_doublons,
+              parse_constant=constante_interdite,
+          )
+
+          exiger(
+              isinstance(data, dict),
+              "Rapport racine invalide"
+          )
+
+          exiger(
+              data.get("version") == "2.5",
+              "Version incorrecte"
+          )
+
+          for cle in (
+              "publication",
+              "fige",
+              "validation_sportive",
+              "transmission_moteurs",
+          ):
+              exiger(
+                  data.get(cle) is False,
+                  f"Interdiction non respectee : {cle}"
+              )
+
+          courses = data.get("courses")
+
+          exiger(
+              isinstance(courses, list),
+              "Liste des courses invalide"
+          )
+
+          compteurs = {
+              "OK": 0,
+              "PARTIEL": 0,
+              "REFUSE": 0,
+          }
+
+          numeros_courses = set()
+
+          for index, course in enumerate(courses):
+              exiger(
+                  isinstance(course, dict),
+                  f"Course {index} invalide"
+              )
+
+              statut = course.get("statut")
+
+              exiger(
+                  statut in compteurs,
+                  f"Statut inconnu : {statut}"
+              )
+
+              compteurs[statut] += 1
+
+              identifiant = course.get("id")
+
+              if identifiant is not None:
+                  exiger(
+                      isinstance(identifiant, str)
+                      and bool(identifiant.strip()),
+                      "Identifiant course invalide"
+                  )
+                  exiger(
+                      identifiant not in numeros_courses,
+                      "Identifiant course duplique"
+                  )
+                  numeros_courses.add(identifiant)
+
+              if statut != "OK":
+                  continue
+
+              exiger(
+                  course.get(
+                      "localisation_france_verifiee"
+                  ) is True,
+                  "Localisation France non verifiee"
+              )
+
+              exiger(
+                  course.get(
+                      "depart_programme_verifie"
+                  ) is True,
+                  "Depart non verifie"
+              )
+
+              exiger(
+                  course.get("partants_verifies") is True,
+                  "Partants non verifies"
+              )
+
+              nombre = course.get("nombre_partants")
+              partants = course.get("partants")
+
+              exiger(
+                  type(nombre) is int and nombre > 0,
+                  "Nombre de partants invalide"
+              )
+
+              exiger(
+                  isinstance(partants, list),
+                  "Liste des partants invalide"
+              )
+
+              exiger(
+                  len(partants) == nombre,
+                  "Nombre de partants incoherent"
+              )
+
+              numeros = set()
+
+              for cheval in partants:
+                  exiger(
+                      isinstance(cheval, dict),
+                      "Partant invalide"
+                  )
+
+                  numero = cheval.get("numero")
+                  nom = cheval.get("nom")
+
+                  exiger(
+                      type(numero) is int and numero > 0,
+                      "Numero de cheval invalide"
+                  )
+
+                  exiger(
+                      numero not in numeros,
+                      "Numero de cheval duplique"
+                  )
+
+                  numeros.add(numero)
+
+                  exiger(
+                      isinstance(nom, str)
+                      and bool(nom.strip()),
+                      "Nom de cheval invalide"
+                  )
+
+                  exiger(
+                      type(
+                          cheval.get("non_partant")
+                      ) is bool,
+                      "Statut non_partant invalide"
+                  )
+
+          correspondances = {
+              "OK": "courses_france_verifiees",
+              "PARTIEL": "courses_partielles",
+              "REFUSE": "courses_refusees",
+          }
+
+          for statut, cle in correspondances.items():
+              valeur = data.get(cle)
+
+              exiger(
+                  type(valeur) is int and valeur >= 0,
+                  f"Compteur invalide : {cle}"
+              )
+
+              exiger(
+                  valeur == compteurs[statut],
+                  f"Compteur incoherent : {cle}"
+              )
+
+          total = sum(compteurs.values())
+
+          exiger(
+              total == len(courses),
+              "Total des courses incoherent"
+          )
+
+          print("X1000 V2.5 : RAPPORT CONFORME")
+          print("Courses controlees :", total)
+          print("France OK :", compteurs["OK"])
+          print("Partielles :", compteurs["PARTIEL"])
+          print("Refusees :", compteurs["REFUSE"])
+          print("Publication : NON")
+          print("FIGE : NON")
+          print("M1-M5 : NON ALIMENTES")
+          PY
+
+      - name: Bilan GitHub
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo "## X1000 V2.5"
+            echo ""
+            echo "- Validation technique : OK"
+            echo "- Branche securisee : OK"
+            echo "- Rapport JSON : conforme"
+            echo "- Compteurs : coherents"
+            echo "- Publication : aucune etape"
+            echo "- FIGE : aucun dans le rapport"
+            echo "- Transmission M1-M5 : desactivee dans le rapport"
+            echo "- Archives : aucune etape de modification"
+            echo ""
+            echo "Voir les journaux pour les compteurs."
+          } >> "$GITHUB_STEP_SUMMARY"
