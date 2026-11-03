@@ -1,42 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""X1000 V2.3 - M5 : fiabilite et risques, lecture seule.
 
+Ne collecte ni ne certifie les donnees PMU. Les indicateurs doivent etre
+verifies en amont. Aucun FIGE, publication ou ecriture de fichier.
 """
-X1000 V2 - MOTEUR M5
-Analyse autonome des risques et de la fiabilite.
-
-- Independant des moteurs M1, M2, M3, M4.
-- Courses PMU physiquement disputees en France.
-- Etude de chaque cheval actif.
-- Cinq positions predites si donnees suffisantes.
-- Aucun participant, pronostic ou resultat invente.
-- Aucun FIGE retroactif.
-- Aucune publication automatique.
-- Aucun fichier existant modifie.
-
-Les indicateurs doivent etre documentes,
-verifies et etablis avant le depart.
-"""
-
 from __future__ import annotations
 
 import argparse
 import json
 import math
 import sys
-
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 MOTEUR = "M5"
-VERSION = "2.0"
-
+VERSION = "2.3"
 MIN_PARTANTS = 5
 MIN_COUVERTURE = 0.60
+SEUIL_RISQUE = 40
 
-# Notes positives : 100 = situation favorable.
 POIDS = {
     "fiabilite": 0.25,
     "regularite": 0.20,
@@ -46,7 +30,14 @@ POIDS = {
     "potentiel_surprise": 0.10,
 }
 
-SEUIL_RISQUE = 40
+RISQUES = {
+    "fiabilite": "Fiabilite sportive faible",
+    "regularite": "Irregularite des performances",
+    "resistance": "Resistance insuffisante",
+    "adaptation_conditions": "Adaptation incertaine",
+    "stabilite_performance": "Stabilite insuffisante",
+    "potentiel_surprise": "Potentiel de surprise faible",
+}
 
 
 def maintenant() -> str:
@@ -54,31 +45,21 @@ def maintenant() -> str:
 
 
 def note_valide(valeur: Any) -> float | None:
-    """Accepte seulement les notes numeriques 0-100."""
-
-    if isinstance(valeur, bool):
-        return None
-
-    if not isinstance(valeur, (int, float)):
+    if isinstance(valeur, bool) or not isinstance(valeur, (int, float)):
         return None
 
     try:
-        valeur = float(valeur)
-    except (ValueError, TypeError, OverflowError):
+        note = float(valeur)
+    except (TypeError, ValueError, OverflowError):
         return None
 
-    if not math.isfinite(valeur):
+    if not math.isfinite(note):
         return None
 
-    if not 0 <= valeur <= 100:
-        return None
-
-    return valeur
+    return note if 0 <= note <= 100 else None
 
 
 def verifier_course(course: Any) -> tuple[bool, str]:
-    """Controle les conditions minimales d'analyse."""
-
     if not isinstance(course, dict):
         return False, "Format de course invalide"
 
@@ -106,14 +87,18 @@ def verifier_course(course: Any) -> tuple[bool, str]:
         date_depart = datetime.fromisoformat(
             depart.replace("Z", "+00:00")
         )
-    except ValueError:
+
+        if (
+            date_depart.tzinfo is None
+            or date_depart.utcoffset() is None
+        ):
+            return False, "Fuseau horaire absent"
+
+        if date_depart <= datetime.now(timezone.utc):
+            return False, "Depart deja passe"
+
+    except (ValueError, TypeError, OverflowError):
         return False, "Date de depart invalide"
-
-    if date_depart.tzinfo is None:
-        return False, "Fuseau horaire absent"
-
-    if date_depart <= datetime.now(timezone.utc):
-        return False, "Depart deja passe"
 
     partants = course.get("partants")
 
@@ -155,83 +140,75 @@ def verifier_course(course: Any) -> tuple[bool, str]:
 
 
 def analyser_cheval(cheval: dict) -> dict:
-    """Calcule la fiabilite sportive independante."""
-
     indicateurs = cheval.get("indicateurs_m5")
 
     if not isinstance(indicateurs, dict):
         indicateurs = {}
 
-    total = 0.0
-    couverture = 0.0
     criteres = {}
+    couverture_exacte = 0.0
+    total = 0.0
 
     for critere, poids in POIDS.items():
-        valeur = note_valide(indicateurs.get(critere))
+        note = note_valide(indicateurs.get(critere))
 
-        if valeur is None:
+        if note is None:
             continue
 
-        criteres[critere] = valeur
-        total += valeur * poids
-        couverture += poids
-
-    couverture = round(couverture, 4)
+        criteres[critere] = note
+        couverture_exacte += poids
+        total += note * poids
 
     score = None
 
-    if couverture >= MIN_COUVERTURE:
-        score = round(total / couverture, 2)
+    if couverture_exacte + 1e-12 >= MIN_COUVERTURE:
+        score = round(total / couverture_exacte, 2)
 
-    risques = []
-
-    noms_risques = {
-        "fiabilite": "Fiabilite sportive faible",
-        "regularite": "Irregularite des performances",
-        "resistance": "Resistance insuffisante",
-        "adaptation_conditions": "Adaptation incertaine",
-        "stabilite_performance": "Stabilite insuffisante",
-        "potentiel_surprise": "Potentiel de surprise faible",
-    }
-
-    for critere, valeur in criteres.items():
-        if valeur < SEUIL_RISQUE:
-            risques.append({
-                "critere": critere,
-                "note": valeur,
-                "description": noms_risques[critere],
-            })
+    risques = [
+        {
+            "critere": critere,
+            "note": note,
+            "description": RISQUES[critere],
+        }
+        for critere, note in criteres.items()
+        if note < SEUIL_RISQUE
+    ]
 
     return {
         "numero": cheval["numero"],
         "nom": cheval["nom"],
+        "score": score,
         "score_m5": score,
-        "couverture": couverture,
+        "couverture": round(couverture_exacte, 4),
         "criteres": criteres,
+        "criteres_manquants": [
+            cle for cle in POIDS if cle not in criteres
+        ],
         "risques": risques,
         "admissible": score is not None,
     }
 
 
 def analyser_course(course: Any) -> dict:
-    """Etablit cinq positions M5 avant le depart."""
-
     valide, raison = verifier_course(course)
 
     resultat = {
         "moteur": MOTEUR,
         "version": VERSION,
-        "analyse_a": maintenant(),
         "course_id": (
             course.get("id")
             if isinstance(course, dict)
             else None
         ),
+        "analyse_a": maintenant(),
         "statut": "NON_ANALYSABLE",
         "raison": raison,
         "classement": [],
+        "classement_partiel": [],
         "chevaux_analyses": [],
+        "chevaux_evalues": 0,
         "alertes_risques": [],
+        "donnees_manquantes": [],
         "fige": False,
         "publication": False,
     }
@@ -247,61 +224,83 @@ def analyser_course(course: Any) -> dict:
 
     resultat["chevaux_analyses"] = analyses
 
-    admissibles = [
-        cheval
+    resultat["alertes_risques"] = [
+        {
+            "numero": cheval["numero"],
+            "nom": cheval["nom"],
+            "risques": cheval["risques"],
+        }
         for cheval in analyses
-        if cheval["admissible"]
+        if cheval["risques"]
     ]
 
-    if len(admissibles) < 5:
-        resultat["raison"] = (
-            "Moins de cinq chevaux avec des "
-            "indicateurs M5 suffisants"
-        )
-        return resultat
+    resultat["donnees_manquantes"] = [
+        {
+            "numero": cheval["numero"],
+            "nom": cheval["nom"],
+            "criteres_manquants": cheval["criteres_manquants"],
+        }
+        for cheval in analyses
+        if cheval["criteres_manquants"]
+    ]
 
-    admissibles.sort(
+    admissibles = sorted(
+        (
+            cheval for cheval in analyses
+            if cheval["admissible"]
+        ),
         key=lambda cheval: (
             -cheval["score_m5"],
             -cheval["couverture"],
             cheval["numero"],
-        )
+        ),
     )
 
-    classement = []
+    resultat["chevaux_evalues"] = len(admissibles)
 
-    for position, cheval in enumerate(
-        admissibles[:5], start=1
-    ):
-        classement.append({
+    classement = [
+        {
             "position_predite": position,
             "numero": cheval["numero"],
             "nom": cheval["nom"],
+            "score": cheval["score"],
             "score_m5": cheval["score_m5"],
             "couverture": cheval["couverture"],
             "risques": cheval["risques"],
-        })
+        }
+        for position, cheval in enumerate(
+            admissibles[:5],
+            start=1
+        )
+    ]
 
-    alertes = []
-
-    for cheval in analyses:
-        if cheval["risques"]:
-            alertes.append({
-                "numero": cheval["numero"],
-                "nom": cheval["nom"],
-                "risques": cheval["risques"],
-            })
-
-    resultat["classement"] = classement
-    resultat["alertes_risques"] = alertes
-    resultat["statut"] = "ANALYSE_DISPONIBLE"
-    resultat["raison"] = (
-        "Classement independant M5 calcule "
-        "sur les indicateurs documentes. "
-        "Prediction non garantie."
-    )
+    if len(admissibles) >= 5:
+        resultat["classement"] = classement
+        resultat["statut"] = "ANALYSE_DISPONIBLE"
+        resultat["raison"] = (
+            "Classement M5 sur indicateurs fournis. "
+            "Prediction non garantie."
+        )
+    else:
+        resultat["classement_partiel"] = classement
+        resultat["statut"] = "DONNEES_INSUFFISANTES"
+        resultat["raison"] = (
+            "Moins de cinq chevaux suffisamment documentes"
+        )
 
     return resultat
+
+
+def analyser_course_m5(course: Any) -> dict:
+    return analyser_course(course)
+
+
+class MoteurM5:
+    nom = MOTEUR
+    version = VERSION
+
+    def analyser(self, course: Any) -> dict:
+        return analyser_course(course)
 
 
 def main() -> int:
@@ -318,9 +317,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        chemin = Path(args.input)
-
-        with chemin.open(
+        with Path(args.input).open(
             "r",
             encoding="utf-8"
         ) as fichier:
@@ -348,7 +345,7 @@ def main() -> int:
     ) as erreur:
         print(
             f"Erreur M5 : {erreur}",
-            file=sys.stderr,
+            file=sys.stderr
         )
         return 1
 
