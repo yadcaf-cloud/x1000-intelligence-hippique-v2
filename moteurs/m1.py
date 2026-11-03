@@ -1,100 +1,177 @@
-"""X1000 V2 - M1 : statistiques et performances."""
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-from datetime import datetime, timezone
+"""
+X1000 V2.4 - M1 : STATISTIQUES ET PERFORMANCES
+
+Decision sportive independante sur donnees documentees.
+
+Criteres :
+- Forme
+- Regularite
+- Distance
+- Parcours
+- Performance
+
+Securite :
+- Courses PMU en France verifiees en amont.
+- Depart verifie et non encore passe.
+- Partants et non-partants controles.
+- Aucune donnee sportive inventee.
+- Aucun FIGE automatique ou retroactif.
+- Aucune publication.
+- Aucune modification des archives.
+
+Les validations techniques sont deleguees
+au noyau commun X1000 V2.4.
+"""
+
+from __future__ import annotations
+
+import sys
+from typing import Any
+
+# ============================================================
+# 1. IMPORT DU NOYAU COMMUN
+# ============================================================
+
+if __package__:
+    from .noyau_commun import (
+        VERSION as VERSION_NOYAU,
+        analyser_course as analyse_commune,
+        executer,
+    )
+else:
+    from noyau_commun import (
+        VERSION as VERSION_NOYAU,
+        analyser_course as analyse_commune,
+        executer,
+    )
 
 
-class MoteurM1:
-    """Moteur independant de classement statistique."""
+# ============================================================
+# 2. IDENTITE ET CONFIGURATION
+# ============================================================
 
-    nom = "M1"
-    version = "2.0"
+MOTEUR = "M1"
+VERSION = "2.4"
+CHAMP = "statistiques"
 
-    def analyser(self, course):
-        if not isinstance(course, dict):
-            raise ValueError("Course invalide")
+COUVERTURE_MIN = 1.0
 
-        if course.get("localisation_france_verifiee") is not True:
-            raise ValueError("Course en France non verifiee")
+POIDS = {
+    "forme": 0.20,
+    "regularite": 0.20,
+    "distance": 0.20,
+    "parcours": 0.20,
+    "performance": 0.20,
+}
 
-        if course.get("depart_verifie") is not True:
-            raise ValueError("Depart non verifie")
 
-        partants = course.get("partants")
-        if not isinstance(partants, list):
-            raise ValueError("Liste des partants absente")
+# ============================================================
+# 3. COMPATIBILITE DU NOYAU
+# ============================================================
 
-        resultats = []
-        numeros = set()
+def verifier_noyau() -> None:
+    """
+    Refuse une version incompatible du noyau commun.
+    """
 
-        for cheval in partants:
-            if not isinstance(cheval, dict):
-                raise ValueError("Cheval invalide")
-
-            numero = cheval.get("numero")
-            nom = cheval.get("nom")
-
-            if type(numero) is not int or numero <= 0:
-                raise ValueError("Numero invalide")
-            if numero in numeros:
-                raise ValueError("Numero en double")
-            if not isinstance(nom, str) or not nom.strip():
-                raise ValueError("Nom de cheval invalide")
-
-            numeros.add(numero)
-
-            if cheval.get("non_partant") is True:
-                continue
-
-            statistiques = cheval.get("statistiques")
-            if not isinstance(statistiques, dict):
-                continue
-
-            criteres = (
-                "forme",
-                "regularite",
-                "distance",
-                "parcours",
-                "performance",
-            )
-
-            valeurs = []
-            for critere in criteres:
-                valeur = statistiques.get(critere)
-                if type(valeur) not in (int, float):
-                    break
-                if not 0 <= valeur <= 100:
-                    break
-                valeurs.append(float(valeur))
-
-            if len(valeurs) != len(criteres):
-                continue
-
-            score = round(sum(valeurs) / len(valeurs), 2)
-
-            resultats.append({
-                "numero": numero,
-                "nom": nom,
-                "score": score,
-            })
-
-        resultats.sort(
-            key=lambda x: (-x["score"], x["numero"])
+    if VERSION_NOYAU != VERSION:
+        raise RuntimeError(
+            "Version du noyau incompatible : "
+            f"M1={VERSION}, noyau={VERSION_NOYAU}"
         )
 
-        return {
-            "moteur": self.nom,
-            "version": self.version,
-            "course_id": course.get("id"),
-            "analyse_a": datetime.now(
-                timezone.utc
-            ).isoformat(),
-            "statut": (
-                "ANALYSE_DISPONIBLE"
-                if len(resultats) >= 5
-                else "DONNEES_INSUFFISANTES"
-            ),
-            "classement": resultats[:5]
-            if len(resultats) >= 5 else [],
-            "chevaux_evalues": len(resultats),
-            "fige": False,
-        }
+
+# ============================================================
+# 4. ANALYSE SPORTIVE M1
+# ============================================================
+
+def analyser_course(course: Any) -> dict:
+    """
+    Analyse statistique independante du moteur M1.
+
+    Le noyau commun effectue les controles techniques
+    et calcule le classement a partir des ponderations
+    propres au moteur M1.
+
+    Aucun classement n'est invente lorsque les
+    indicateurs sont absents ou insuffisants.
+    """
+
+    verifier_noyau()
+
+    return analyse_commune(
+        course=course,
+        moteur=MOTEUR,
+        poids=POIDS,
+        champ=CHAMP,
+        couverture_min=COUVERTURE_MIN,
+    )
+
+
+# ============================================================
+# 5. INTERFACE DU COORDINATEUR X1000
+# ============================================================
+
+def analyser_course_m1(course: Any) -> dict:
+    """
+    Point d'entree explicite pour X1000.
+    """
+
+    return analyser_course(course)
+
+
+# ============================================================
+# 6. CLASSE MOTEUR M1
+# ============================================================
+
+class MoteurM1:
+    """
+    Moteur M1 autonome dans ses choix statistiques.
+
+    Exemple :
+        moteur = MoteurM1()
+        resultat = moteur.analyser(course)
+    """
+
+    nom = MOTEUR
+    version = VERSION
+
+    def analyser(self, course: Any) -> dict:
+        """
+        Retourne la decision sportive M1.
+        """
+
+        return analyser_course(course)
+
+
+# ============================================================
+# 7. EXECUTION SECURISEE
+# ============================================================
+
+def main() -> int:
+    """
+    Execution en lecture seule.
+
+    Commande :
+        python -m moteurs.m1 --input course.json
+
+    Codes de sortie :
+        0 : analyse complete disponible
+        2 : analyse incomplete ou course non analysable
+        1 : erreur technique
+    """
+
+    verifier_noyau()
+
+    return executer(analyser_course)
+
+
+# ============================================================
+# 8. DEMARRAGE
+# ============================================================
+
+if __name__ == "__main__":
+    sys.exit(main())
