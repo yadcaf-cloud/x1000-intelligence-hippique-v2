@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#071521">
+<meta name="description" content="X1000 PHOENIX PMU France V2.5 - Courses françaises, moteurs M1 à M5, FIGÉS et audits.">
+<title>🇸🇳🇫🇷 X1000 PHOENIX — PMU France</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #071521;
+  --panel: #102838;
+  --panel2: #173849;
+  --border: #315263;
+  --text: #f0f7f5;
+  --muted: #b7cbd0;
+  --gold: #efce7e;
+  --green: #82e1b6;
+  --blue: #a7dfff;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: radial-gradient(ellipse at top,#12374a,var(--bg) 65%);
+  color: var(--text);
+  font: 16px/1.5 system-ui,Arial,sans-serif;
+}
+a { color: var(--blue); }
+button,select,input { font: inherit; }
+button { cursor: pointer; }
+button:focus-visible,a:focus-visible,
+select:focus-visible,input:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 3px;
+}
+.wrap {
+  width: min(1240px,calc(100% - 28px));
+  margin: auto;
+}
+header {
+  padding: 24px 0;
+  border-bottom: 1px solid var(--border);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+.logo { font-size: 46px; }
+h1 {
+  margin: 0;
+  color: var(--gold);
+  font-size: clamp(1.5rem,4vw,2.6rem);
+}
+.muted { color: var(--muted); }
+.small { font-size: .88rem; }
+nav {
+  display: flex;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding: 15px 0;
+}
+nav a,.btn {
+  display: inline-block;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #16384b;
+  color: white;
+  text-decoration: none;
+}
+nav a:hover,.btn:hover { background: #20516a; }
+nav .active,.primary {
+  background: #087b46;
+  border-color: #20bb75;
+}
+.hero {
+  margin: 12px 0 20px;
+  padding: 25px;
+  border: 1px solid #1fa46c;
+  border-radius: 18px;
+  background: linear-gradient(115deg,#123f38,#0a2536 65%);
+}
+.hero h2 {
+  margin: 0 0 8px;
+  font-size: clamp(1.5rem,4vw,2.3rem);
+}
+.layout {
+  display: grid;
+  grid-template-columns: minmax(220px,1fr) minmax(0,2.5fr);
+  gap: 16px;
+}
+.stack {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+.panel {
+  min-width: 0;
+  padding: 17px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: linear-gradient(145deg,var(--panel),#091e2d);
+}
+.panel h3 { margin: 0 0 12px; }
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.grid5 {
+  display: grid;
+  grid-template-columns: repeat(5,minmax(0,1fr));
+  gap: 10px;
+}
+.engine {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: #122d40;
+}
+.engine strong { font-size: 1.3rem; }
+.engine .ranking {
+  color: var(--gold);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.engine:nth-child(1) { border-top: 4px solid #4db8ff; }
+.engine:nth-child(2) { border-top: 4px solid #a98aff; }
+.engine:nth-child(3) { border-top: 4px solid #ffb35c; }
+.engine:nth-child(4) { border-top: 4px solid #67df9a; }
+.engine:nth-child(5) { border-top: 4px solid #ef81c2; }
+.record {
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.record:last-child { border-bottom: 0; }
+.empty {
+  padding: 14px;
+  border: 1px dashed #527182;
+  border-radius: 10px;
+  color: var(--muted);
+}
+.status,.pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 30px;
+  font-size: .82rem;
+}
+.status {
+  border: 1px solid #9b7c34;
+  color: var(--gold);
+}
+.pill { background: #1d4252; }
+.notice {
+  padding: 12px;
+  border-left: 3px solid var(--gold);
+  border-radius: 5px;
+  background: #302a1a;
+}
+.filters {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+select,input[type="date"] {
+  max-width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #173849;
+  color: white;
+}
+details summary {
+  cursor: pointer;
+  color: var(--blue);
+}
+footer {
+  margin-top: 25px;
+  padding: 24px 0;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+}
+@media(max-width:900px) {
+  .layout { grid-template-columns: 1fr; }
+  .grid5 { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@media(max-width:480px) {
+  .grid5 { grid-template-columns: 1fr; }
+  .hero { padding: 17px; }
+  .logo { font-size: 30px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  html { scroll-behavior: auto; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap brand">
+    <span class="logo" aria-hidden="true">🦅</span>
+    <div>
+      <h1>X1000 PHOENIX</h1>
+      <div>🇸🇳 🇫🇷 Intelligence Hippique V2.5 — PMU France</div>
+      <div class="small muted">
+        M1 · M2 · M3 · M4 · M5
+        | Consultation sans publication de paris
+      </div>
+    </div>
+  </div>
+</header>
+
+<nav class="wrap" aria-label="Navigation principale">
+  <a href="./index.html">⌂ Accueil X1000</a>
+  <a class="active" href="#courses">🏇 Courses France</a>
+  <a href="#moteurs">⚙ Moteurs</a>
+  <a href="#figes">🔒 FIGÉS</a>
+  <a href="#audits">📋 Audits</a>
+  <a href="#archives">🗂 Archives</a>
+</nav>
+
+<main class="wrap">
+
+<section class="hero">
+  <h2>🏇 PMU FRANCE — X1000</h2>
+  <p>
+    Courses françaises · Analyses indépendantes ·
+    FIGÉS avant départ · Résultats officiels
+  </p>
+  <p class="small muted">
+    Interface indépendante. Aucune affiliation officielle
+    avec PMU n'est revendiquée.
+  </p>
+  <span id="connection" class="status" role="status">
+    Données non chargées
+  </span>
+</section>
+
+<div class="layout">
+
+<aside class="stack">
+
+<section id="courses" class="panel">
+  <h3>📅 Courses françaises</h3>
+  <div class="filters">
+    <label for="date">Date</label>
+    <input id="date" type="date">
+  </div>
+  <div id="courseList" class="empty">
+    Aucune course chargée.
+  </div>
+</section>
+
+<section class="panel">
+  <h3>🏆 Formules possibles</h3>
+  <p class="small muted">
+    Les formules autorisées dépendent des données
+    attestées pour chaque course.
+  </p>
+  <div id="formules">
+    Simple gagnant / placé · Couplé · 2sur4 ·
+    Trio · Multi · Tiercé · Quarté+ · Quinté+ ·
+    Pick5 · Super4
+    <p class="small muted">
+      Liste indicative, non validée pour une course particulière.
+    </p>
+  </div>
+</section>
+
+<section class="panel">
+  <h3>🔎 Provenance des données</h3>
+  <p class="small muted">
+    Les données sont lues depuis les fichiers JSON
+    publiés par votre projet.
+    Aucun accès direct à PMU n'est supposé.
+  </p>
+  <button id="refresh" class="btn primary" type="button">
+    ↻ Actualiser
+  </button>
+  <p id="updated" class="small muted"></p>
+</section>
+
+</aside>
+
+<div class="stack">
+
+<section class="panel">
+  <div class="row">
+    <h3>🎯 Course sélectionnée</h3>
+    <select id="courseSelect" aria-label="Choisir une course">
+      <option value="">Aucune course disponible</option>
+    </select>
+  </div>
+  <div id="selected" class="empty">
+    Choisissez une course lorsque des données sont disponibles.
+  </div>
+</section>
+
+<section id="moteurs" class="panel">
+  <h3>⚙ Analyses indépendantes — M1 à M5</h3>
+  <div id="engines" class="grid5"></div>
+</section>
+
+<section id="figes" class="panel">
+  <h3>🔒 FIGÉ avant départ</h3>
+  <div id="fige" class="empty">
+    Aucun FIGÉ disponible pour cette course.
+  </div>
+</section>
+
+<section id="audits" class="panel">
+  <h3>📋 Résultats et audits</h3>
+  <div id="audit" class="empty">
+    Aucun audit officiel vérifié disponible.
+  </div>
+</section>
+
+<section id="archives" class="panel">
+  <h3>🗂 Archives</h3>
+  <div id="archivesList" class="empty">
+    Aucune archive chargée.
+  </div>
+</section>
+
+<div class="notice small">
+  ⚠ Les résultats, classements et validations ne sont
+  jamais inventés. Un FIGÉ affiché ici est une donnée
+  archivée, pas une nouvelle validation.
+  Les audits nécessitent une référence officielle.
+</div>
+
+</div>
+</div>
+</main>
+
+<footer>
+  <div class="wrap">
+    🇸🇳 X1000 PHOENIX —
+    « Étudier largement, sélectionner intelligemment,
+    FIGER au bon moment AVANT le départ. »
+  </div>
+</footer>
+
+<script>
+'use strict';
+
+// LECTURE SEULE : aucune publication ni modification de pari.
+// Sur GitHub Pages, les fichiers JSON doivent être publiés
+// dans le dossier data/ du dépôt.
+
+const PATHS = {
+  courses: [
+    './data/courses.json',
+    './api/courses'
+  ],
+  selections: [
+    './data/selections.json',
+    './api/selections'
+  ],
+  figes: [
+    './data/figes.json',
+    './api/figes'
+  ],
+  audits: [
+    './data/audits.json',
+    './api/audits'
+  ]
+};
+
+const $ = id => document.getElementById(id);
+
+const state = {
+  courses: [],
+  selections: [],
+  figes: [],
+  audits: [],
+  selected: ''
+};
+
+const esc = value =>
+  String(value ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[c]));
+
+const plain = value =>
+  typeof value === 'string' || typeof value === 'number'
+    ? String(value)
+    : '—';
+
+const arr = value =>
+  Array.isArray(value) ? value : [];
+
+function records(data, keys) {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== 'object') return [];
+
+  for (const key of keys) {
+    if (Array.isArray(data[key])) return data[key];
+  }
+  return [];
+}
+
+function courseId(course) {
+  return String(
+    course.id ??
+    course.course_id ??
+    course.cid ??
+    ''
+  );
+}
+
+function recordId(record) {
+  return String(
+    record.course_id ??
+    record.cid ??
+    record.id_course ??
+    record.course?.id ??
+    record.course?.course_id ??
+    ''
+  );
+}
+
+function sameCourse(record, id) {
+  return recordId(record) === id;
+}
+
+function time(value) {
+  if (!value) return '—';
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return plain(value);
+  }
+
+  return new Intl.DateTimeFormat('fr-FR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'Europe/Paris'
+  }).format(date);
+}
+
+function listNumbers(value) {
+  if (Array.isArray(value)) {
+    return value.map(plain).join(' - ');
+  }
+
+  if (
+    typeof value === 'string' &&
+    /^[\d,\s-]+$/.test(value)
+  ) {
+    return value.replace(/,/g, ' - ');
+  }
+
+  return 'Non disponible';
+}
+
+function htmlEmpty(message) {
+  return `<div class="empty">${esc(message)}</div>`;
+}
+
+async function readOne(paths) {
+  for (const path of paths) {
+    try {
+      const response = await fetch(path, {
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json'
+        }
+      });
+
+      if (!response.ok) continue;
+
+      const data = await response.json();
+      return { data, path };
+
+    } catch (error) {
+      // Essayer la source suivante.
+    }
+  }
+
+  return null;
+}
+
+function chooseRecords(kind, result) {
+  if (!result) return [];
+
+  const keys = {
+    courses: ['courses', 'items', 'data'],
+    selections: ['selections', 'items', 'data'],
+    figes: ['figes', 'items', 'data'],
+    audits: ['audits', 'items', 'data']
+  }[kind];
+
+  return records(result.data, keys);
+}
+
+function render() {
+  const date = $('date').value;
+
+  const visible = state.courses.filter(course =>
+    !date ||
+    courseId(course).startsWith(date) ||
+    String(course.date ?? '').startsWith(date)
+  );
+
+  $('courseList').innerHTML = visible.length
+    ? visible.map(course => `
+      <div class="record">
+        <button
+          type="button"
+          class="btn"
+          data-course="${esc(courseId(course))}">
+          ${esc(courseId(course))}
+        </button>
+        <div class="small muted">
+          ${esc(plain(course.hippodrome ?? course.lieu ?? ''))}
+          ·
+          ${esc(time(
+            course.depart ??
+            course.heure_depart ??
+            course.depart_at
+          ))}
+        </div>
+      </div>
+    `).join('')
+    : htmlEmpty('Aucune course pour la date choisie.');
+
+  const options = visible.filter(course => courseId(course));
+
+  if (!options.some(course => courseId(course) === state.selected)) {
+    state.selected = options[0] ? courseId(options[0]) : '';
+  }
+
+  $('courseSelect').innerHTML = options.length
+    ? options.map(course => `
+      <option
+        value="${esc(courseId(course))}"
+        ${courseId(course) === state.selected ? 'selected' : ''}>
+        ${esc(courseId(course))}
+        —
+        ${esc(plain(course.hippodrome ?? ''))}
+      </option>
+    `).join('')
+    : '<option value="">Aucune course disponible</option>';
+
+  const course = options.find(
+    item => courseId(item) === state.selected
+  );
+
+  $('selected').innerHTML = course
+    ? `
+      <p>
+        <strong>${esc(courseId(course))}</strong>
+        · ${esc(plain(course.hippodrome ?? course.lieu))}
+      </p>
+      <p class="muted">
+        Départ :
+        ${esc(time(
+          course.depart ??
+          course.heure_depart ??
+          course.depart_at
+        ))}
+        · Discipline :
+        ${esc(plain(course.discipline ?? course.specialite))}
+        · Distance :
+        ${esc(plain(course.distance))}
+      </p>
+      <p>
+        Partants :
+        ${esc(
+          Array.isArray(course.partants)
+            ? String(course.partants.length)
+            : plain(course.nombre_partants)
+        )}
+      </p>
+    `
+    : htmlEmpty('Aucune course sélectionnée.');
+
+  renderEngines();
+  renderFige();
+  renderAudit();
+
+  $('archivesList').innerHTML =
+    state.figes.length || state.audits.length
+      ? `
+        <p>
+          ${state.figes.length} enregistrement(s) FIGÉ
+          · ${state.audits.length} audit(s) chargé(s).
+        </p>
+        <p class="small muted">
+          Les versions antérieures restent dans les
+          fichiers sources lorsqu'elles y sont conservées.
+        </p>
+      `
+      : htmlEmpty('Aucune archive chargée.');
+}
+
+function renderEngines() {
+  const matches = state.selected
+    ? state.selections.filter(record =>
+        sameCourse(record, state.selected)
+      )
+    : [];
+
+  $('engines').innerHTML =
+    ['M1', 'M2', 'M3', 'M4', 'M5'].map(engine => {
+
+      const selection = matches.find(record =>
+        String(
+          record.moteur ??
+          record.engine ??
+          record.module ??
+          ''
+        ).toUpperCase() === engine
+      );
+
+      const ranking = selection
+        ? listNumbers(
+            selection.ranking ??
+            selection.classement ??
+            selection.top5 ??
+            selection.selection
+          )
+        : 'Non disponible';
+
+      const analysis = selection
+        ? plain(
+            selection.analysis ??
+            selection.analyse ??
+            'Analyse non fournie.'
+          )
+        : 'Aucune analyse publiée.';
+
+      return `
+        <article class="engine">
+          <strong>${engine}</strong>
+          <div class="small muted">Top 5</div>
+          <p class="ranking">${esc(ranking)}</p>
+          <details>
+            <summary>Analyse</summary>
+            <p class="small">${esc(analysis)}</p>
+          </details>
+        </article>
+      `;
+    }).join('');
+}
+
+function renderFige() {
+  const found = state.selected
+    ? state.figes
+        .filter(record => sameCourse(record, state.selected))
+        .sort((a, b) =>
+          Number(b.version ?? 0) - Number(a.version ?? 0)
+        )
+    : [];
+
+  const fige = found[0];
+
+  $('fige').innerHTML = fige
+    ? `
+      <p>
+        <span class="pill">
+          ${esc(plain(fige.status ?? fige.statut ?? 'Statut non précisé'))}
+        </span>
+        · Version ${esc(plain(fige.version))}
+      </p>
+      <p>
+        <strong>Sélection :</strong>
+        ${esc(listNumbers(
+          fige.ranking ??
+          fige.classement ??
+          fige.selection ??
+          fige.top5
+        ))}
+      </p>
+      <p class="small muted">
+        Vérification :
+        ${esc(time(fige.verifie_a ?? fige.verified_at))}
+      </p>
+      <p class="small muted">
+        Source :
+        ${esc(plain(fige.source ?? fige.source_reference))}
+      </p>
+      <p class="small muted">
+        Archive consultative : ne constitue pas une
+        vérification en temps réel.
+      </p>
+    `
+    : htmlEmpty('Aucun FIGÉ disponible pour cette course.');
+}
+
+function renderAudit() {
+  const audit = state.selected &&
+    state.audits.find(record =>
+      sameCourse(record, state.selected) &&
+      record.resultat_verifie === true &&
+      typeof (
+        record.source_officielle ?? record.source
+      ) === 'string' &&
+      String(
+        record.source_officielle ?? record.source
+      ).trim()
+    );
+
+  $('audit').innerHTML = audit
+    ? `
+      <p>
+        <strong>Arrivée vérifiée :</strong>
+        ${esc(listNumbers(audit.arrival ?? audit.arrivee))}
+      </p>
+      <p>
+        <strong>Source officielle :</strong>
+        ${esc(plain(
+          audit.source_officielle ?? audit.source
+        ))}
+      </p>
+      <p class="small muted">
+        Top 5 détectés :
+        ${esc(plain(audit.top5_detectes))}
+        · Ordre exact :
+        ${
+          audit.ordre_exact === true
+            ? 'Oui'
+            : audit.ordre_exact === false
+              ? 'Non'
+              : 'Non renseigné'
+        }
+      </p>
+    `
+    : htmlEmpty(
+        'Aucun audit avec résultat vérifié et référence officielle disponible.'
+      );
+}
+
+let loading = false;
+
+async function load() {
+  if (loading) return;
+
+  loading = true;
+  $('refresh').disabled = true;
+  $('connection').textContent = 'Chargement des sources…';
+
+  try {
+    const results = await Promise.all(
+      Object.entries(PATHS).map(async ([kind, paths]) => [
+        kind,
+        await readOne(paths)
+      ])
+    );
+
+    let count = 0;
+
+    for (const [kind, result] of results) {
+      state[kind] = chooseRecords(kind, result);
+      if (result) count++;
+    }
+
+    $('connection').textContent =
+      count === 4
+        ? '4 sources JSON accessibles'
+        : count
+          ? `${count}/4 sources JSON accessibles`
+          : 'Aucune source JSON accessible';
+
+    $('updated').textContent =
+      `Dernière tentative : ${time(new Date().toISOString())}`;
+
+    render();
+
+  } finally {
+    loading = false;
+    $('refresh').disabled = false;
+  }
+}
+
+$('courseList').addEventListener('click', event => {
+  const button = event.target instanceof Element
+    ? event.target.closest('button[data-course]')
+    : null;
+
+  if (button) {
+    state.selected = button.dataset.course;
+    render();
+  }
+});
+
+$('courseSelect').addEventListener('change', event => {
+  state.selected = event.target.value;
+  render();
+});
+
+$('date').addEventListener('change', render);
+$('refresh').addEventListener('click', load);
+
+render();
+load();
+
+</script>
+</body>
+</html>
