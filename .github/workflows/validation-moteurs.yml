@@ -1,0 +1,116 @@
+name: "X1000 V2 - Validation securisee M1-M5"
+
+on:
+  push:
+    branches:
+      - feature/installation-x1000-v2
+    paths:
+      - "moteurs/**"
+      - "tests/**"
+      - "validation_moteurs.py"
+      - "coordination_x1000.py"
+      - ".github/workflows/validation-moteurs.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x1000-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validation:
+    name: "Controle technique sans publication"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    env:
+      TZ: Europe/Paris
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONNOUSERSITE: "1"
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verifier les fichiers Python
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast
+
+          fichiers = sorted(Path(".").rglob("*.py"))
+          assert fichiers, "Aucun fichier Python trouve"
+
+          for fichier in fichiers:
+              if ".git" in fichier.parts:
+                  continue
+              ast.parse(
+                  fichier.read_text(encoding="utf-8"),
+                  filename=str(fichier)
+              )
+              print("SYNTAXE OK:", fichier)
+
+          print("Controle syntaxique termine")
+          PY
+
+      - name: Verifier les moteurs M1 a M5
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          dossier = Path("moteurs")
+          assert dossier.is_dir(), "Dossier moteurs absent"
+
+          for numero in range(1, 6):
+              nom = f"m{numero}.py"
+              candidats = [
+                  dossier / nom,
+                  dossier / f"M{numero}.py"
+              ]
+              assert any(p.is_file() for p in candidats), (
+                  f"Moteur M{numero} absent"
+              )
+              print(f"M{numero}: fichier present")
+          PY
+
+      - name: Executer les tests existants
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          tests = (
+              list(Path(".").glob("test_*.py"))
+              + list(Path("tests").rglob("test_*.py"))
+              if Path("tests").exists()
+              else list(Path(".").glob("test_*.py"))
+          )
+
+          assert tests, "Aucun test Python trouve"
+
+          resultat = subprocess.run(
+              [
+                  sys.executable, "-m", "unittest",
+                  "discover", "-s", ".", "-p", "test_*.py"
+              ],
+              check=False
+          )
+          sys.exit(resultat.returncode)
+          PY
+
+      - name: Validation terminee
+        run: |
+          echo "Controles termines"
+          echo "Aucune publication PMU"
+          echo "Aucune modification de main"
