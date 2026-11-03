@@ -1,0 +1,280 @@
+name: X1000 V2.4 - Audit collecte PMU reelle
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - feature/installation-x1000-v2
+    paths:
+      - audit_collecte_pmu.py
+      - .github/workflows/audit-collecte-pmu-v24.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x1000-v24-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audit-pmu:
+    name: Audit PMU sans publication
+
+    if: >-
+      github.ref == 'refs/heads/feature/installation-x1000-v2'
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    env:
+      TZ: Europe/Paris
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONNOUSERSITE: "1"
+
+    steps:
+      - name: Recuperer la branche securisee
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verifier branche et fichier
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REF" = \
+            "refs/heads/feature/installation-x1000-v2"
+
+          test -f audit_collecte_pmu.py
+
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          fichier = Path("audit_collecte_pmu.py")
+
+          source = fichier.read_text(
+              encoding="utf-8"
+          )
+
+          ast.parse(
+              source,
+              filename=str(fichier)
+          )
+
+          print("Syntaxe Python valide")
+          PY
+
+      - name: Executer audit PMU reel
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python audit_collecte_pmu.py \
+            > "$RUNNER_TEMP/audit-pmu.json"
+
+      - name: Valider rapport de collecte
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import json
+          import os
+          import re
+
+          from datetime import datetime
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          def refuser_doublons(paires):
+              resultat = {}
+
+              for cle, valeur in paires:
+                  if cle in resultat:
+                      raise ValueError(
+                          f"Cle dupliquee : {cle}"
+                      )
+                  resultat[cle] = valeur
+
+              return resultat
+
+          def refuser_constante(valeur):
+              raise ValueError(
+                  f"Constante interdite : {valeur}"
+              )
+
+          def verifier(condition, message):
+              if not condition:
+                  raise ValueError(message)
+
+          chemin = (
+              Path(os.environ["RUNNER_TEMP"])
+              / "audit-pmu.json"
+          )
+
+          verifier(
+              chemin.is_file(),
+              "Rapport absent"
+          )
+
+          verifier(
+              0 < chemin.stat().st_size <= 65536,
+              "Taille du rapport invalide"
+          )
+
+          data = json.loads(
+              chemin.read_text(encoding="utf-8"),
+              object_pairs_hook=refuser_doublons,
+              parse_constant=refuser_constante,
+          )
+
+          verifier(
+              isinstance(data, dict),
+              "Rapport non objet"
+          )
+
+          verifier(
+              data.get("version") == "2.4",
+              "Version incorrecte"
+          )
+
+          verifier(
+              data.get("statut")
+              == "AUDIT_SEUL_SANS_PUBLICATION",
+              "Statut incorrect"
+          )
+
+          for cle in (
+              "publication",
+              "fige",
+              "validation_sportive",
+          ):
+              verifier(
+                  data.get(cle) is False,
+                  f"{cle} doit etre false"
+              )
+
+          for cle in (
+              "courses_france_verifiees",
+              "courses_transmises_moteurs",
+          ):
+              verifier(
+                  type(data.get(cle)) is int
+                  and data[cle] == 0,
+                  f"{cle} doit etre zero"
+              )
+
+          for cle in (
+              "reunions",
+              "courses_brutes",
+          ):
+              valeur = data.get(cle)
+
+              verifier(
+                  type(valeur) is int
+                  and valeur >= 0,
+                  f"{cle} invalide"
+              )
+
+          verifier(
+              isinstance(data.get("raison"), str)
+              and bool(data["raison"].strip()),
+              "Raison manquante"
+          )
+
+          date_pmu = datetime.now(
+              ZoneInfo("Europe/Paris")
+          ).date()
+
+          verifier(
+              data.get("date")
+              == date_pmu.isoformat(),
+              "Date PMU incorrecte"
+          )
+
+          source_attendue = (
+              "https://online.turfinfo.api.pmu.fr"
+              "/rest/client/1/programme/"
+              + date_pmu.strftime("%d%m%Y")
+          )
+
+          verifier(
+              data.get("source") == source_attendue,
+              "Source PMU incorrecte"
+          )
+
+          empreinte = data.get("source_sha256")
+
+          verifier(
+              isinstance(empreinte, str)
+              and re.fullmatch(
+                  r"[0-9a-f]{64}",
+                  empreinte
+              ) is not None,
+              "Empreinte SHA-256 invalide"
+          )
+
+          collecte = data.get("collecte_a")
+
+          verifier(
+              isinstance(collecte, str),
+              "Horodatage absent"
+          )
+
+          horodatage = datetime.fromisoformat(
+              collecte.replace("Z", "+00:00")
+          )
+
+          verifier(
+              horodatage.tzinfo is not None
+              and horodatage.utcoffset()
+              is not None,
+              "Horodatage sans fuseau"
+          )
+
+          verifier(
+              abs(
+                  (
+                      datetime.now(
+                          horodatage.tzinfo
+                      ) - horodatage
+                  ).total_seconds()
+              ) <= 600,
+              "Horodatage hors tolerance"
+          )
+
+          print("AUDIT X1000 V2.4 CONFORME")
+          print("Source PMU controlee")
+          print("Structure du rapport valide")
+          print("Aucune validation sportive")
+          print("Aucune transmission M1-M5")
+          print("Aucune publication")
+          PY
+
+      - name: Bilan de securite
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## X1000 V2.4 - Audit PMU"
+            echo ""
+            echo "- Audit technique : reussi"
+            echo "- Source : PMU"
+            echo "- Donnees : brutes uniquement"
+            echo "- M1-M5 : non alimentes"
+            echo "- FIGE : aucun"
+            echo "- Publication : aucune"
+            echo "- Archives : non modifiees"
+            echo ""
+            echo "Validation sportive non effectuee."
+          } >> "$GITHUB_STEP_SUMMARY"
