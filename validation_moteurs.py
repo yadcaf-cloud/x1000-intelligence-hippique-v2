@@ -1,14 +1,20 @@
 """Validation défensive des courses et des sorties M1-M5.
 
-Ce module ne collecte aucune donnée, ne lance aucun moteur
-et ne publie rien.
+Ce module ne collecte aucune donnée, ne lance aucun moteur,
+ne crée aucun FIGÉ et ne publie rien.
+
+Les attestations reçues ne constituent pas
+une vérification officielle indépendante.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+
 MOTEURS = tuple(f"M{i}" for i in range(1, 6))
+
 MAX_AVANCE_DEPART = timedelta(days=30)
 
 
@@ -17,63 +23,91 @@ class ValidationErreur(ValueError):
 
 
 def _numero(valeur: Any, contexte: str) -> int:
+    """Accepte uniquement un entier strictement positif."""
+
     if type(valeur) is not int or valeur <= 0:
         raise ValidationErreur(
             f"{contexte}: numéro entier positif exigé"
         )
+
     return valeur
 
 
-def valider_course(course: dict[str, Any]) -> set[int]:
-    """Retourne les numéros actifs d'une course validée.
+def _depart_utc(valeur: Any) -> datetime:
+    """Convertit un départ ISO 8601 horodaté en UTC."""
 
-    Les indicateurs de vérification doivent provenir
-    d'un collecteur fiable.
-    """
-    if not isinstance(course, dict):
-        raise ValidationErreur("Course invalide")
-
-    if course.get("localisation_france_verifiee") is not True:
+    if not isinstance(valeur, str) or not valeur.strip():
         raise ValidationErreur(
-            "Localisation France non vérifiée"
+            "Date de départ manquante"
         )
 
-    if course.get("depart_verifie") is not True:
-        raise ValidationErreur("Départ non vérifié")
+    texte = valeur.strip()
 
-    depart = course.get("depart")
-
-    if not isinstance(depart, str) or not depart.strip():
-        raise ValidationErreur("Date de départ manquante")
+    if texte.endswith(("Z", "z")):
+        texte = texte[:-1] + "+00:00"
 
     try:
-        dt = datetime.fromisoformat(
-            depart.strip().replace("Z", "+00:00")
-        )
-    except ValueError as exc:
+        depart = datetime.fromisoformat(texte)
+
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValidationErreur(
             "Date de départ illisible"
         ) from exc
 
-    if dt.tzinfo is None or dt.utcoffset() is None:
+    if depart.tzinfo is None or depart.utcoffset() is None:
         raise ValidationErreur(
             "Départ sans fuseau horaire"
         )
 
     try:
-        depart_utc = dt.astimezone(timezone.utc)
+        return depart.astimezone(timezone.utc)
+
     except (ValueError, OverflowError) as exc:
         raise ValidationErreur(
             "Décalage horaire invalide"
         ) from exc
 
+
+def valider_course(course: dict[str, Any]) -> set[int]:
+    """Valide une course future et retourne ses numéros actifs.
+
+    Les indicateurs de vérification sont des attestations
+    fournies en entrée.
+
+    Cette fonction ne consulte pas elle-même
+    les sources officielles.
+    """
+
+    if not isinstance(course, dict):
+        raise ValidationErreur(
+            "Course invalide"
+        )
+
+    # Vérification déclarée de la localisation française.
+    if course.get("localisation_france_verifiee") is not True:
+        raise ValidationErreur(
+            "Localisation France non vérifiée"
+        )
+
+    # Vérification déclarée de l'horaire.
+    if course.get("depart_verifie") is not True:
+        raise ValidationErreur(
+            "Départ non vérifié"
+        )
+
+    depart_utc = _depart_utc(
+        course.get("depart")
+    )
+
     maintenant = datetime.now(timezone.utc)
 
+    # Aucun nouveau FIGÉ après départ.
     if depart_utc <= maintenant:
         raise ValidationErreur(
             "Départ déjà passé : pas de nouveau FIGÉ"
         )
 
+    # Limite défensive de fraîcheur de la programmation.
     if depart_utc - maintenant > MAX_AVANCE_DEPART:
         raise ValidationErreur(
             "Départ trop éloigné : vérification nécessaire"
@@ -91,11 +125,15 @@ def valider_course(course: dict[str, Any]) -> set[int]:
     non_partants_reels: set[int] = set()
 
     for cheval in partants:
+
         if not isinstance(cheval, dict):
-            raise ValidationErreur("Partant invalide")
+            raise ValidationErreur(
+                "Partant invalide"
+            )
 
         numero = _numero(
-            cheval.get("numero"), "Partant"
+            cheval.get("numero"),
+            "Partant"
         )
 
         if numero in vus:
@@ -122,7 +160,9 @@ def valider_course(course: dict[str, Any]) -> set[int]:
         else:
             actifs.add(numero)
 
+    # Cohérence du nombre déclaré de chevaux actifs.
     if "nombre_partants" in course:
+
         nombre = course["nombre_partants"]
 
         if type(nombre) is not int or nombre != len(actifs):
@@ -130,7 +170,9 @@ def valider_course(course: dict[str, Any]) -> set[int]:
                 "Nombre de partants actifs incohérent"
             )
 
+    # Cohérence de la liste des non-partants.
     if "non_partants" in course:
+
         liste_np = course["non_partants"]
 
         if not isinstance(liste_np, list):
@@ -153,6 +195,7 @@ def valider_course(course: dict[str, Any]) -> set[int]:
                 "Liste des non-partants incohérente"
             )
 
+    # Cinq chevaux actifs minimum pour un classement Top 5.
     if len(actifs) < 5:
         raise ValidationErreur(
             "Moins de cinq partants actifs"
@@ -164,15 +207,24 @@ def valider_course(course: dict[str, Any]) -> set[int]:
 def valider_prediction(
     moteur: str,
     positions: Any,
-    actifs: set[int]
+    actifs: set[int],
 ) -> list[int]:
-    """Vérifie cinq positions distinctes et actives."""
+    """Vérifie cinq positions distinctes et actives.
 
-    if moteur not in MOTEURS:
-        raise ValidationErreur("Moteur inconnu")
+    Cette fonction ne calcule pas de pronostic.
+    Elle contrôle uniquement une sortie déjà produite.
+    """
 
+    # Identification stricte des cinq moteurs.
+    if type(moteur) is not str or moteur not in MOTEURS:
+        raise ValidationErreur(
+            "Moteur inconnu"
+        )
+
+    # Ensemble des numéros actifs.
     if (
-        not isinstance(actifs, set)
+        type(actifs) is not set
+        or len(actifs) < 5
         or any(
             type(n) is not int or n <= 0
             for n in actifs
@@ -182,11 +234,13 @@ def valider_prediction(
             "Ensemble de partants actifs invalide"
         )
 
-    if not isinstance(positions, list) or len(positions) != 5:
+    # Cinq positions exactement.
+    if type(positions) is not list or len(positions) != 5:
         raise ValidationErreur(
             f"{moteur}: cinq positions exigées"
         )
 
+    # Numéros entiers strictement positifs.
     if any(
         type(n) is not int or n <= 0
         for n in positions
@@ -195,6 +249,7 @@ def valider_prediction(
             f"{moteur}: numéros entiers positifs exigés"
         )
 
+    # Aucun doublon ni cheval absent ou non partant.
     if (
         len(set(positions)) != 5
         or not set(positions).issubset(actifs)
@@ -203,4 +258,5 @@ def valider_prediction(
             f"{moteur}: doublon ou cheval non-partant/inconnu"
         )
 
+    # Copie indépendante de la liste d'origine.
     return positions.copy()
