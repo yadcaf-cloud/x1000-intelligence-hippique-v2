@@ -2,46 +2,76 @@
 # -*- coding: utf-8 -*-
 
 """
-X1000 V2 — API de consultation sécurisée.
+X1000 V2.4 - API DE CONSULTATION SECURISEE
 
-- Chargement des moteurs M1 à M5.
-- Correction du chargement de M1.
-- Consultation des courses et sélections.
-- Consultation des FIGÉS et audits.
-- Analyses temporaires avant départ.
-- Aucun FIGÉ automatique.
-- Aucune modification des archives.
+Fonctions :
+- Chargement uniforme des moteurs M1 a M5.
+- Utilisation exclusive du paquet moteurs/.
+- Validation des courses par le noyau commun.
+- Consultation des courses et selections.
+- Consultation des FIGES et audits.
+- Analyses sportives temporaires avant depart.
+- Verification des classements des moteurs.
+- Diagnostic technique en lecture seule.
+
+Interdictions :
+- Aucune collecte PMU automatique.
+- Aucune donnee sportive inventee.
+- Aucun FIGE automatique ou retroactif.
 - Aucune publication automatique.
+- Aucune modification des archives.
+- Aucune ecriture dans les fichiers de donnees.
+
+Execution :
+    python api.py --host 127.0.0.1 --port 8000
 """
+
+from __future__ import annotations
 
 import argparse
 import importlib
-import importlib.util
 import json
 import os
+import sys
 
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import (
+    BaseHTTPRequestHandler,
+    ThreadingHTTPServer,
+)
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
+
+# ============================================================
+# 1. CONFIGURATION GENERALE
+# ============================================================
 
 ROOT = Path(__file__).resolve().parent
 
 DATA = Path(
     os.environ.get(
         "X1000_DATA_DIR",
-        str(ROOT / "data")
+        str(ROOT / "data"),
     )
 ).resolve()
 
 ORIGIN = os.environ.get(
-    "X1000_ALLOWED_ORIGIN", ""
+    "X1000_ALLOWED_ORIGIN",
+    "",
 ).rstrip("/")
 
 MAX_FILE = 5_000_000
+MAX_COURSES_ANALYSEES = 100
 
-MOTEURS = ("M1", "M2", "M3", "M4", "M5")
+MOTEURS = (
+    "M1",
+    "M2",
+    "M3",
+    "M4",
+    "M5",
+)
 
 ROUTES = (
     "/api/status",
@@ -52,31 +82,126 @@ ROUTES = (
     "/api/diagnostic",
 )
 
+FICHIERS_AUTORISES = frozenset({
+    "courses.json",
+    "selections.json",
+    "figes.json",
+    "audits.json",
+})
+
+STATUTS_MOTEURS = frozenset({
+    "ANALYSE_DISPONIBLE",
+    "DONNEES_INSUFFISANTES",
+    "NON_ANALYSABLE",
+})
+
 
 # ============================================================
-# 1. LECTURE SÉCURISÉE DES DONNÉES
+# 2. CHARGEMENT DU NOYAU COMMUN
 # ============================================================
+
+def charger_noyau():
+    """
+    Charge le noyau technique commun.
+
+    Aucun repli vers les anciens modules.
+    """
+
+    return importlib.import_module(
+        "moteurs.noyau_commun"
+    )
+
+
+# ============================================================
+# 3. LECTURE JSON SECURISEE
+# ============================================================
+
+def refuser_doublons(paires):
+    """Refuse les cles JSON dupliquees."""
+
+    resultat = {}
+
+    for cle, valeur in paires:
+
+        if cle in resultat:
+            raise ValueError(
+                f"Cle JSON dupliquee : {cle}"
+            )
+
+        resultat[cle] = valeur
+
+    return resultat
+
+
+def refuser_constante(valeur):
+    """Refuse NaN, Infinity et -Infinity."""
+
+    raise ValueError(
+        f"Constante JSON interdite : {valeur}"
+    )
+
 
 def load(name):
+    """
+    Lit uniquement les fichiers autorises.
+
+    Retourne :
+        (donnees, erreur)
+
+    Aucun fichier n'est modifie.
+    """
+
+    if name not in FICHIERS_AUTORISES:
+        return [], "Nom de fichier non autorise"
+
     path = DATA / name
 
     try:
+
         if not path.is_file():
-            return [], "Fichier absent : " + name
+            return [], (
+                "Fichier absent : " + name
+            )
 
         if path.stat().st_size > MAX_FILE:
-            return [], "Fichier trop volumineux : " + name
+            return [], (
+                "Fichier trop volumineux : " + name
+            )
+
+        with path.open("rb") as fichier:
+            contenu = fichier.read(
+                MAX_FILE + 1
+            )
+
+        if len(contenu) > MAX_FILE:
+            return [], (
+                "Fichier trop volumineux : " + name
+            )
 
         value = json.loads(
-            path.read_text(encoding="utf-8")
+            contenu.decode("utf-8"),
+            object_pairs_hook=refuser_doublons,
+            parse_constant=refuser_constante,
         )
 
-        if not isinstance(value, (list, dict)):
-            return [], "Format JSON inattendu : " + name
+        if not isinstance(
+            value,
+            (list, dict),
+        ):
+            return [], (
+                "Format JSON inattendu : " + name
+            )
 
         return value, None
 
-    except (OSError, ValueError) as exc:
+    except (
+        OSError,
+        UnicodeError,
+        ValueError,
+        TypeError,
+        OverflowError,
+    ) as exc:
+
         return [], (
             "JSON illisible : "
             + name
@@ -86,46 +211,209 @@ def load(name):
         )
 
 
+# ============================================================
+# 4. EXTRACTION DES COLLECTIONS
+# ============================================================
+
 def items(value):
+    """
+    Extrait les elements d'une collection.
+
+    Les objets JSON uniques ne sont pas
+    interpretes comme des listes de courses.
+    """
+
     if isinstance(value, list):
         return value
 
     if isinstance(value, dict):
-        if isinstance(value.get("courses"), list):
+
+        if isinstance(
+            value.get("courses"),
+            list,
+        ):
             return value["courses"]
 
-        return list(value.values())
+        if isinstance(
+            value.get("selections"),
+            list,
+        ):
+            return value["selections"]
+
+        if isinstance(
+            value.get("items"),
+            list,
+        ):
+            return value["items"]
+
+        if (
+            value
+            and all(
+                isinstance(element, dict)
+                for element in value.values()
+            )
+        ):
+            return list(value.values())
 
     return []
 
 
 # ============================================================
-# 2. LOCALISATION DES MOTEURS
+# 5. LOCALISATION DES MOTEURS
 # ============================================================
 
 def engine_path(name):
+    """
+    Utilise exclusivement les moteurs V2.4.
+
+    M1 : moteurs/m1.py
+    M2 : moteurs/m2.py
+    M3 : moteurs/m3.py
+    M4 : moteurs/m4.py
+    M5 : moteurs/m5.py
+    """
+
     if name not in MOTEURS:
         return None
 
-    if name == "M1":
-        return ROOT / "moteurs" / "m1.py"
-
-    return ROOT / (name.lower() + ".py")
+    return (
+        ROOT
+        / "moteurs"
+        / (name.lower() + ".py")
+    )
 
 
 def engine_available(name):
+    """Verifie la presence physique du moteur."""
+
     path = engine_path(name)
 
     return bool(
-        path is not None and path.is_file()
+        path is not None
+        and path.is_file()
     )
 
 
 # ============================================================
-# 3. CHARGEMENT ET EXÉCUTION M1 À M5
+# 6. VALIDATION DES COURSES
+# ============================================================
+
+def verifier_course(course):
+    """
+    Applique la validation du noyau commun.
+
+    Controle notamment :
+    - Localisation France verifiee.
+    - Depart verifie et futur.
+    - Depart dans les 30 prochains jours.
+    - Partants et non-partants coherents.
+    - Au moins cinq partants actifs.
+    """
+
+    try:
+
+        noyau = charger_noyau()
+
+        valide, raison = noyau.verifier_course(
+            course
+        )
+
+        return bool(valide), str(raison)
+
+    except (
+        ImportError,
+        AttributeError,
+        ValueError,
+        TypeError,
+        RuntimeError,
+        OverflowError,
+    ) as exc:
+
+        return False, (
+            "Validation indisponible : "
+            + type(exc).__name__
+        )
+
+
+def course_analysable(course):
+    """Compatibilite avec l'ancienne API."""
+
+    valide, _ = verifier_course(course)
+
+    return valide
+
+
+# ============================================================
+# 7. VERIFICATION DES SORTIES SPORTIVES
+# ============================================================
+
+def verifier_resultat_moteur(
+    name,
+    course,
+    resultat,
+):
+    """
+    Controle les sorties M1-M5.
+
+    Aucun resultat incomplet ne devient
+    une prediction complete.
+    """
+
+    if not isinstance(resultat, dict):
+        raise ValueError(
+            "Resultat moteur invalide"
+        )
+
+    if resultat.get("moteur") != name:
+        raise ValueError(
+            "Identite du moteur incoherente"
+        )
+
+    if (
+        resultat.get("statut")
+        not in STATUTS_MOTEURS
+    ):
+        raise ValueError(
+            "Statut moteur non autorise"
+        )
+
+    if resultat.get("fige") is not False:
+        raise ValueError(
+            "FIGE interdit"
+        )
+
+    if resultat.get("publication") is not False:
+        raise ValueError(
+            "Publication interdite"
+        )
+
+    noyau = charger_noyau()
+
+    noyau.verifier_sortie_analyse(
+        course,
+        resultat,
+    )
+
+    return resultat
+
+
+# ============================================================
+# 8. EXECUTION INDEPENDANTE DES MOTEURS
 # ============================================================
 
 def engine(name, course):
+    """
+    Execute un moteur independant.
+
+    Chaque moteur conserve :
+    - Ses criteres sportifs.
+    - Ses ponderations.
+    - Ses scores.
+    - Ses cinq positions predites.
+    - Ses risques et alertes.
+
+    Aucune publication ni ecriture.
+    """
 
     if name not in MOTEURS:
         return {
@@ -133,49 +421,32 @@ def engine(name, course):
             "statut": "INDISPONIBLE",
             "raison": "Moteur inconnu",
             "classement": [],
+            "classement_partiel": [],
+            "fige": False,
+            "publication": False,
         }
 
-    path = engine_path(name)
-
-    if path is None or not path.is_file():
+    if not engine_available(name):
         return {
             "moteur": name,
             "statut": "INDISPONIBLE",
-            "raison": "Module absent",
+            "raison": "Module moteur absent",
             "classement": [],
+            "classement_partiel": [],
+            "fige": False,
+            "publication": False,
         }
 
     try:
 
-        # M1 doit être chargé comme module du paquet
-        # moteurs afin de résoudre .noyau_commun.
-
-        if name == "M1":
-            module = importlib.import_module(
-                "moteurs.m1"
-            )
-
-        else:
-            spec = importlib.util.spec_from_file_location(
-                "x1000_" + name.lower(),
-                path
-            )
-
-            if spec is None or spec.loader is None:
-                raise ImportError(
-                    "Impossible de charger " + name
-                )
-
-            module = importlib.util.module_from_spec(
-                spec
-            )
-
-            spec.loader.exec_module(module)
+        module = importlib.import_module(
+            "moteurs." + name.lower()
+        )
 
         analyser = getattr(
             module,
             "analyser_course",
-            None
+            None,
         )
 
         if not callable(analyser):
@@ -183,16 +454,16 @@ def engine(name, course):
                 "Fonction analyser_course absente"
             )
 
-        result = analyser(course)
+        resultat = analyser(course)
 
-        if not isinstance(result, dict):
-            raise ValueError(
-                "Résultat moteur invalide"
-            )
-
-        return result
+        return verifier_resultat_moteur(
+            name,
+            course,
+            resultat,
+        )
 
     except Exception as exc:
+
         return {
             "moteur": name,
             "statut": "ERREUR",
@@ -202,70 +473,47 @@ def engine(name, course):
                 + str(exc)[:180]
             ),
             "classement": [],
+            "classement_partiel": [],
+            "fige": False,
+            "publication": False,
         }
 
 
 # ============================================================
-# 4. CONTRÔLE DES COURSES AVANT DÉPART
-# ============================================================
-
-def course_analysable(course):
-
-    if not isinstance(course, dict):
-        return False
-
-    if (
-        course.get("localisation_france_verifiee")
-        is not True
-    ):
-        return False
-
-    if course.get("depart_verifie") is not True:
-        return False
-
-    depart = course.get("depart")
-
-    if not isinstance(depart, str):
-        return False
-
-    try:
-        date_depart = datetime.fromisoformat(
-            depart.replace("Z", "+00:00")
-        )
-
-        if date_depart.tzinfo is None:
-            return False
-
-        if date_depart <= datetime.now(
-            timezone.utc
-        ):
-            return False
-
-    except (ValueError, TypeError, OverflowError):
-        return False
-
-    return True
-
-
-# ============================================================
-# 5. ANALYSES TEMPORAIRES
+# 9. ANALYSES TEMPORAIRES
 # ============================================================
 
 def analyser_courses(courses):
+    """
+    Analyse au maximum 100 courses.
+
+    Seules les courses techniquement
+    admissibles sont analysees.
+
+    Aucune selection n'est enregistree.
+    """
 
     output = []
 
-    for course in items(courses)[:100]:
+    for course in items(courses):
 
-        if not course_analysable(course):
+        if len(output) >= MAX_COURSES_ANALYSEES:
+            break
+
+        valide, raison = verifier_course(
+            course
+        )
+
+        if not valide:
             continue
 
         resultats = {}
 
         for moteur in MOTEURS:
+
             resultats[moteur] = engine(
                 moteur,
-                course
+                course,
             )
 
         output.append({
@@ -273,80 +521,136 @@ def analyser_courses(courses):
             "moteurs": resultats,
             "temporaire": True,
             "fige": False,
+            "publication": False,
+            "raison_validation": raison,
         })
 
     return output
 
 
 # ============================================================
-# 6. SERVEUR HTTP EN LECTURE SEULE
+# 10. SERVEUR HTTP EN LECTURE SEULE
 # ============================================================
 
 class Handler(BaseHTTPRequestHandler):
+    """API HTTP sans methode d'ecriture."""
 
-    def send_json(self, value, status=200):
+    server_version = "X1000-API/2.4"
 
-        body = json.dumps(
-            value,
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode("utf-8")
+    def send_json(
+        self,
+        value,
+        status=200,
+    ):
+        """Envoie une reponse JSON securisee."""
+
+        try:
+
+            body = json.dumps(
+                value,
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+
+        except (
+            TypeError,
+            ValueError,
+            OverflowError,
+        ):
+
+            status = 500
+
+            body = json.dumps({
+                "erreur": (
+                    "Erreur de serialisation JSON"
+                )
+            }).encode("utf-8")
 
         self.send_response(status)
 
         self.send_header(
             "Content-Type",
-            "application/json; charset=utf-8"
+            "application/json; charset=utf-8",
         )
 
         self.send_header(
             "Cache-Control",
-            "no-store"
+            "no-store",
         )
 
         self.send_header(
             "X-Content-Type-Options",
-            "nosniff"
+            "nosniff",
         )
 
         self.send_header(
             "X-Frame-Options",
-            "DENY"
+            "DENY",
         )
 
-        origin = self.headers.get("Origin", "")
+        self.send_header(
+            "Referrer-Policy",
+            "no-referrer",
+        )
+
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'",
+        )
+
+        origin = self.headers.get(
+            "Origin",
+            "",
+        )
 
         if ORIGIN and origin == ORIGIN:
+
             self.send_header(
                 "Access-Control-Allow-Origin",
-                ORIGIN
+                ORIGIN,
             )
+
             self.send_header(
                 "Vary",
-                "Origin"
+                "Origin",
             )
 
         self.send_header(
             "Content-Length",
-            str(len(body))
+            str(len(body)),
         )
 
         self.end_headers()
 
         try:
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
+
+        except (
+            BrokenPipeError,
+            ConnectionResetError,
+        ):
             pass
+
+    # --------------------------------------------------------
+    # CONSULTATION HTTP
+    # --------------------------------------------------------
 
     def do_GET(self):
 
-        path = urlsplit(self.path).path
+        path = urlsplit(
+            self.path
+        ).path
 
         if path not in ROUTES:
+
             return self.send_json(
                 {"erreur": "Route inconnue"},
-                404
+                404,
             )
+
+        # ----------------------------------------------------
+        # CHARGEMENT DES DONNEES
+        # ----------------------------------------------------
 
         courses, err_courses = load(
             "courses.json"
@@ -366,17 +670,17 @@ class Handler(BaseHTTPRequestHandler):
 
         errors = {
             key: value
-            for key, value in [
+            for key, value in (
                 ("courses", err_courses),
                 ("selections", err_selections),
                 ("figes", err_figes),
                 ("audits", err_audits),
-            ]
+            )
             if value
         }
 
         # ----------------------------------------------------
-        # STATUT GÉNÉRAL
+        # STATUT GENERAL
         # ----------------------------------------------------
 
         if path == "/api/status":
@@ -384,16 +688,22 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({
                 "mode": "LECTURE_SEULE_WEB",
 
+                "version": "2.4",
+
                 "date_utc": datetime.now(
                     timezone.utc
                 ).isoformat(),
 
                 "moteurs": {
-                    m: engine_available(m)
-                    for m in MOTEURS
+                    moteur: engine_available(
+                        moteur
+                    )
+                    for moteur in MOTEURS
                 },
 
                 "erreurs": errors,
+
+                "collecte_automatique": False,
 
                 "publication": False,
 
@@ -401,24 +711,72 @@ class Handler(BaseHTTPRequestHandler):
             })
 
         # ----------------------------------------------------
-        # DIAGNOSTIC
+        # DIAGNOSTIC TECHNIQUE
         # ----------------------------------------------------
 
         if path == "/api/diagnostic":
 
+            noyau_disponible = False
+            noyau_version = None
+            noyau_erreur = None
+
+            try:
+
+                noyau = charger_noyau()
+
+                noyau_disponible = True
+
+                noyau_version = getattr(
+                    noyau,
+                    "VERSION",
+                    None,
+                )
+
+            except Exception as exc:
+
+                noyau_erreur = (
+                    type(exc).__name__
+                )
+
             return self.send_json({
-                "erreurs": errors,
+                "mode": "LECTURE_SEULE_WEB",
 
-                "data_dir_configure": DATA.is_dir(),
+                "version_api": "2.4",
 
-                "origine_autorisee": bool(ORIGIN),
+                "noyau_disponible": (
+                    noyau_disponible
+                ),
+
+                "version_noyau": (
+                    noyau_version
+                ),
+
+                "erreur_noyau": (
+                    noyau_erreur
+                ),
+
+                "data_dir_configure": (
+                    DATA.is_dir()
+                ),
+
+                "origine_autorisee": bool(
+                    ORIGIN
+                ),
 
                 "moteurs_presents": {
-                    m: engine_available(m)
-                    for m in MOTEURS
+                    moteur: engine_available(
+                        moteur
+                    )
+                    for moteur in MOTEURS
                 },
 
-                "mode": "LECTURE_SEULE_WEB",
+                "erreurs": errors,
+
+                "collecte_automatique": False,
+
+                "publication": False,
+
+                "figes_automatiques": False,
             })
 
         # ----------------------------------------------------
@@ -426,98 +784,148 @@ class Handler(BaseHTTPRequestHandler):
         # ----------------------------------------------------
 
         if path == "/api/courses":
-            return self.send_json(courses)
+
+            return self.send_json(
+                courses
+            )
 
         # ----------------------------------------------------
-        # FIGÉS : CONSULTATION UNIQUEMENT
+        # FIGES : CONSULTATION UNIQUEMENT
         # ----------------------------------------------------
 
         if path == "/api/figes":
-            return self.send_json(figes)
+
+            return self.send_json(
+                figes
+            )
 
         # ----------------------------------------------------
         # AUDITS : CONSULTATION UNIQUEMENT
         # ----------------------------------------------------
 
         if path == "/api/audits":
-            return self.send_json(audits)
+
+            return self.send_json(
+                audits
+            )
 
         # ----------------------------------------------------
-        # SÉLECTIONS
+        # SELECTIONS
         # ----------------------------------------------------
 
-        if items(selections):
-            return self.send_json(selections)
+        if path == "/api/selections":
 
-        # Aucune sélection enregistrée :
-        # calcul temporaire uniquement.
+            if items(selections):
 
-        output = analyser_courses(courses)
+                return self.send_json(
+                    selections
+                )
 
-        return self.send_json(output)
+            # Aucun enregistrement disponible :
+            # calcul temporaire en memoire uniquement.
+
+            output = analyser_courses(
+                courses
+            )
+
+            return self.send_json(
+                output
+            )
 
     # --------------------------------------------------------
-    # INTERDICTION DES MODIFICATIONS HTTP
+    # METHODES HTTP INTERDITES
     # --------------------------------------------------------
 
     def do_POST(self):
-        self.send_json(
+
+        return self.send_json(
             {"erreur": "Lecture seule"},
-            405
+            405,
         )
 
     def do_PUT(self):
-        self.send_json(
+
+        return self.send_json(
             {"erreur": "Lecture seule"},
-            405
+            405,
         )
 
     def do_PATCH(self):
-        self.send_json(
+
+        return self.send_json(
             {"erreur": "Lecture seule"},
-            405
+            405,
         )
 
     def do_DELETE(self):
-        self.send_json(
+
+        return self.send_json(
             {"erreur": "Lecture seule"},
-            405
+            405,
         )
 
 
 # ============================================================
-# 7. DÉMARRAGE DE L'API
+# 11. DEMARRAGE DE L'API
 # ============================================================
 
 def main():
 
     parser = argparse.ArgumentParser(
-        description="X1000 V2 - API lecture seule"
+        description=(
+            "X1000 V2.4 - API lecture seule"
+        )
     )
 
     parser.add_argument(
         "--host",
-        default="127.0.0.1"
+        default="127.0.0.1",
+        help="Adresse d'ecoute locale",
     )
 
     parser.add_argument(
         "--port",
         type=int,
         default=int(
-            os.environ.get("PORT", "8000")
-        )
+            os.environ.get(
+                "PORT",
+                "8000",
+            )
+        ),
+        help="Port HTTP",
     )
 
     args = parser.parse_args()
 
-    server = ThreadingHTTPServer(
-        (args.host, args.port),
-        Handler
-    )
+    if not 1 <= args.port <= 65535:
+        parser.error(
+            "Le port doit etre compris "
+            "entre 1 et 65535"
+        )
+
+    try:
+
+        serveur = ThreadingHTTPServer(
+            (
+                args.host,
+                args.port,
+            ),
+            Handler,
+        )
+
+    except OSError as exc:
+
+        print(
+            "Erreur de demarrage API : "
+            + str(exc),
+            file=sys.stderr,
+        )
+
+        return 1
 
     print(
-        "X1000 V2 — API lecture seule",
-        flush=True
+        "X1000 V2.4 - API lecture seule",
+        flush=True,
     )
 
     print(
@@ -525,18 +933,25 @@ def main():
         + args.host
         + ":"
         + str(args.port),
-        flush=True
+        flush=True,
     )
 
     try:
-        server.serve_forever()
+
+        serveur.serve_forever()
 
     except KeyboardInterrupt:
         pass
 
     finally:
-        server.server_close()
+        serveur.server_close()
 
+    return 0
+
+
+# ============================================================
+# 12. EXECUTION
+# ============================================================
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
