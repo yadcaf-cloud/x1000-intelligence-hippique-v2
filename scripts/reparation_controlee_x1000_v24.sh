@@ -1,36 +1,51 @@
-
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# X1000 V2.4 — REPARATION CONTROLEE
-# Audit et copies isolees uniquement.
-# Aucun commit, push, FIGE ou publication.
-# Aucun moteur execute.
+# ============================================================
+# X1000 V2.4 — REPARATION CONTROLEE ET AUDIT SECURISE
+# ============================================================
+# M1, M2, M3, M4, M5 et noyau commun
+#
+# - Aucune modification des fichiers originaux
+# - Aucune modification des archives
+# - Aucune collecte PMU
+# - Aucune publication
+# - Aucun FIGE automatique
+# - Aucun commit ou push automatique
+# - Aucun moteur execute
+# - Copies de controle dans un dossier temporaire
+# - Rapport JSON local
+# ============================================================
 
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONNOUSERSITE=1
+
 umask 077
 
 PYTHON="${PYTHON:-python3}"
 EXPECTED="yadcaf-cloud/x1000-intelligence-hippique-v2"
 
 info() {
-    printf '[X1000] %s\n' "$*"
+    printf '\n[X1000] %s\n' "$*"
 }
 
 fail() {
-    printf '[ERREUR] %s\n' "$*" >&2
+    printf '\n[ERREUR] %s\n' "$*" >&2
     exit 1
 }
 
-command -v git >/dev/null ||
+# ============================================================
+# 1. VERIFICATION DE L'ENVIRONNEMENT
+# ============================================================
+
+command -v git >/dev/null 2>&1 ||
     fail "Git introuvable"
 
-command -v "$PYTHON" >/dev/null ||
+command -v "$PYTHON" >/dev/null 2>&1 ||
     fail "Python introuvable"
 
 "$PYTHON" -c \
-    'import sys; assert sys.version_info >= (3, 9)' ||
+    'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' ||
     fail "Python 3.9 minimum requis"
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" ||
@@ -48,15 +63,28 @@ case "$REMOTE" in
     "git@github.com:$EXPECTED.git"|\
     "ssh://git@github.com/$EXPECTED"|\
     "ssh://git@github.com/$EXPECTED.git")
+        info "Depot X1000 reconnu"
         ;;
     *)
         fail "Depot inattendu : $REMOTE"
         ;;
 esac
 
+# ============================================================
+# 2. CONTROLE DE L'ETAT GIT
+# ============================================================
+
+info "Verification de l'etat Git"
+
 if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
-    fail "Depot non propre. Aucun changement effectue."
+    fail "Depot non propre. Audit interrompu."
 fi
+
+info "Aucune modification locale detectee"
+
+# ============================================================
+# 3. CREATION D'UN ESPACE ISOLE
+# ============================================================
 
 TMP_BASE="${TMPDIR:-/tmp}"
 
@@ -67,7 +95,7 @@ TMP_BASE="$(cd "$TMP_BASE" && pwd -P)"
 
 case "$TMP_BASE/" in
     "$ROOT/"*)
-        fail "Dossier temporaire dans le depot"
+        fail "Dossier temporaire situe dans le depot"
         ;;
 esac
 
@@ -76,7 +104,11 @@ WORK="$(mktemp -d "$TMP_BASE/x1000-v24-audit.XXXXXXXX")" ||
 
 mkdir -p "$WORK/moteurs"
 
-info "Audit isole : $WORK"
+info "Dossier de controle : $WORK"
+
+# ============================================================
+# 4. AUDIT STATIQUE DES SIX MODULES
+# ============================================================
 
 "$PYTHON" -B - "$ROOT" "$WORK" <<'PY'
 from pathlib import Path
@@ -89,7 +121,7 @@ import sys
 root = Path(sys.argv[1]).resolve()
 work = Path(sys.argv[2]).resolve()
 
-names = [
+modules = [
     "m1",
     "m2",
     "m3",
@@ -109,21 +141,31 @@ ignored = {
 }
 
 report = {
+    "application": "X1000",
     "version": "2.4",
-    "mode": "AUDIT_ISOLE_SANS_EXECUTION",
+    "type": "AUDIT_STATIQUE_SECURISÉ",
+    "mode": "LECTURE_SEULE_DEPOT",
+    "collecte_pmu": False,
+    "publication": False,
+    "fige_automatique": False,
+    "execution_moteurs": False,
+    "modification_archives": False,
+    "validation_officielle": False,
     "modules": [],
     "errors": [],
     "warnings": [],
 }
 
-for name in names:
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+for name in modules:
     candidates = []
 
     for path in root.rglob("*.py"):
-        if any(
-            part in ignored
-            for part in path.relative_to(root).parts
-        ):
+        relative = path.relative_to(root)
+
+        if any(part in ignored for part in relative.parts):
             continue
 
         if path.is_symlink() or not path.is_file():
@@ -145,52 +187,55 @@ for name in names:
     }
 
     if len(candidates) != 1:
-        entry["status"] = "AMBIGU"
+        entry["status"] = "SOURCE_AMBIGUE_OU_ABSENTE"
         report["errors"].append(
             f"{name}: {len(candidates)} source(s)"
         )
         report["modules"].append(entry)
         continue
 
-    src = candidates[0]
-    dest = work / "moteurs" / (name + ".py")
+    source = candidates[0]
+    destination = work / "moteurs" / f"{name}.py"
 
     try:
-        if not src.resolve().is_relative_to(root):
+        if not source.resolve().is_relative_to(root):
             raise ValueError("Source hors depot")
 
-        data = src.read_bytes()
+        data = source.read_bytes()
 
-        # Verification sans execution.
-        compile(data, str(src), "exec")
-
-        shutil.copyfile(src, dest)
-
-        def sha256(content):
-            return hashlib.sha256(content).hexdigest()
-
-        if sha256(data) != sha256(dest.read_bytes()):
-            raise ValueError("Copie non conforme")
+        # Analyse syntaxique sans execution.
+        compile(data, str(source), "exec")
 
         tree = ast.parse(
             data,
-            filename=str(src),
+            filename=str(source),
         )
+
+        shutil.copyfile(source, destination)
+
+        copied = destination.read_bytes()
+
+        if sha256(data) != sha256(copied):
+            raise ValueError("Copie non conforme")
 
         functions = sorted(
             node.name
             for node in tree.body
             if isinstance(
                 node,
-                (ast.FunctionDef, ast.AsyncFunctionDef),
+                (
+                    ast.FunctionDef,
+                    ast.AsyncFunctionDef,
+                ),
             )
         )
 
         entry.update({
             "status": "SYNTAXE_OK",
+            "source": str(source.relative_to(root)),
             "sha256": sha256(data),
+            "copy": str(destination),
             "functions": functions,
-            "copy": str(dest),
         })
 
         if (
@@ -198,18 +243,19 @@ for name in names:
             and "analyser_course" not in functions
         ):
             report["warnings"].append(
-                f"{name}: contrat analyser_course "
-                "a confirmer"
+                f"{name}: fonction analyser_course "
+                "non detectee au niveau principal"
             )
 
     except (
         OSError,
         SyntaxError,
-        ValueError,
         UnicodeError,
+        ValueError,
     ) as exc:
         entry["status"] = "ERREUR"
         entry["error"] = str(exc)
+
         report["errors"].append(
             f"{name}: {exc}"
         )
@@ -222,9 +268,9 @@ report["status"] = (
     else "CORRECTIONS_NECESSAIRES"
 )
 
-path = work / "rapport_audit_v24.json"
+rapport = work / "rapport_audit_v24.json"
 
-path.write_text(
+rapport.write_text(
     json.dumps(
         report,
         ensure_ascii=False,
@@ -241,18 +287,41 @@ print(
     )
 )
 
-print(f"\nRAPPORT : {path}")
+print(f"\nRAPPORT_JSON={rapport}")
 
 sys.exit(
     0 if not report["errors"] else 1
 )
 PY
 
-info "Audit statique termine."
-info "Originaux preserves."
-info "Archives non modifiees."
-info "Aucun moteur execute."
-info "Aucun FIGE cree."
-info "Aucun commit."
-info "Aucun push."
-info "Aucune publication."
+# ============================================================
+# 5. CONTROLE FINAL DU DEPOT
+# ============================================================
+
+info "Verification finale Git"
+
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+    fail "Modification locale detectee pendant l'audit"
+fi
+
+# ============================================================
+# 6. RESULTAT FINAL
+# ============================================================
+
+printf '\n============================================\n'
+printf 'X1000 V2.4 — AUDIT STATIQUE TERMINE\n'
+printf '============================================\n'
+printf 'Moteurs : M1, M2, M3, M4, M5\n'
+printf 'Noyau commun : controle\n'
+printf 'Originaux : preserves\n'
+printf 'Archives : non modifiees\n'
+printf 'Collecte PMU : aucune\n'
+printf 'Publication : aucune\n'
+printf 'FIGE automatique : aucun\n'
+printf 'Execution moteurs : aucune\n'
+printf 'Commit : aucun\n'
+printf 'Push : aucun\n'
+printf 'Fusion : aucune\n'
+printf '============================================\n'
+
+info "Examiner le rapport avant toute correction."
