@@ -1,541 +1,258 @@
+
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# ============================================================
-# X1000 V2.4 - REPARATION CONTROLEE M1 A M5
-# ============================================================
-# - Aucun ecrasement des fichiers originaux
-# - Aucune modification des archives
-# - Aucune collecte PMU
-# - Aucune publication
-# - Aucun FIGE
-# - Aucun commit ou push automatique
-# - Arret immediat en cas d'anomalie
-# ============================================================
-
-DEPOT="yadcaf-cloud/x1000-intelligence-hippique-v2"
-BRANCHE="fix/audit-general-x1000-v24"
-PYTHON="${PYTHON:-python3}"
+# X1000 V2.4 — REPARATION CONTROLEE
+# Audit et copies isolees uniquement.
+# Aucun commit, push, FIGE ou publication.
+# Aucun moteur execute.
 
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONNOUSERSITE=1
+umask 077
 
-erreur() {
-    printf '\nERREUR : %s\n' "$*" >&2
+PYTHON="${PYTHON:-python3}"
+EXPECTED="yadcaf-cloud/x1000-intelligence-hippique-v2"
+
+info() {
+    printf '[X1000] %s\n' "$*"
+}
+
+fail() {
+    printf '[ERREUR] %s\n' "$*" >&2
     exit 1
 }
 
-info() {
-    printf '\n[X1000] %s\n' "$*"
-}
-
-# ============================================================
-# 1. CONTROLE DE L'ENVIRONNEMENT
-# ============================================================
-
 command -v git >/dev/null ||
-    erreur "Git indisponible"
+    fail "Git introuvable"
 
 command -v "$PYTHON" >/dev/null ||
-    erreur "Python 3 indisponible"
+    fail "Python introuvable"
 
-git rev-parse --show-toplevel >/dev/null 2>&1 ||
-    erreur "Ce dossier n'est pas un depot Git"
+"$PYTHON" -c \
+    'import sys; assert sys.version_info >= (3, 9)' ||
+    fail "Python 3.9 minimum requis"
 
-RACINE="$(git rev-parse --show-toplevel)"
-cd "$RACINE"
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" ||
+    fail "Depot Git introuvable"
 
-REPO_ACTUEL="$(git remote get-url origin 2>/dev/null || true)"
+cd "$ROOT"
 
-case "$REPO_ACTUEL" in
-    *github.com/yadcaf-cloud/x1000-intelligence-hippique-v2* )
+REMOTE="$(git remote get-url origin 2>/dev/null)" ||
+    fail "Remote origin absent"
+
+case "$REMOTE" in
+    "https://github.com/$EXPECTED"|\
+    "https://github.com/$EXPECTED.git"|\
+    "git@github.com:$EXPECTED"|\
+    "git@github.com:$EXPECTED.git"|\
+    "ssh://git@github.com/$EXPECTED"|\
+    "ssh://git@github.com/$EXPECTED.git")
         ;;
     *)
-        erreur "Depot GitHub inattendu : $REPO_ACTUEL"
+        fail "Depot inattendu : $REMOTE"
         ;;
 esac
 
 if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
-    erreur "Depot non propre. Sauvegarder les modifications avant execution."
+    fail "Depot non propre. Aucun changement effectue."
 fi
 
-git check-ref-format --branch "$BRANCHE" >/dev/null ||
-    erreur "Nom de branche invalide"
+TMP_BASE="${TMPDIR:-/tmp}"
 
-if git show-ref --verify --quiet "refs/heads/$BRANCHE"; then
-    erreur "La branche de reparation existe deja"
-fi
+[[ -d "$TMP_BASE" ]] ||
+    fail "Dossier temporaire introuvable"
 
-info "Verification des originaux"
+TMP_BASE="$(cd "$TMP_BASE" && pwd -P)"
 
-# Les espaces finaux font partie des noms originaux.
-SOURCES=(
-    "m1.py "
-    "m2.py "
-    "m3.py "
-    "m4.py"
-    "m5.py "
-    "noyau_commun.py"
-)
+case "$TMP_BASE/" in
+    "$ROOT/"*)
+        fail "Dossier temporaire dans le depot"
+        ;;
+esac
 
-DESTINATIONS=(
-    "moteurs/m1.py"
-    "moteurs/m2.py"
-    "moteurs/m3.py"
-    "moteurs/m4.py"
-    "moteurs/m5.py"
-    "moteurs/noyau_commun.py"
-)
+WORK="$(mktemp -d "$TMP_BASE/x1000-v24-audit.XXXXXXXX")" ||
+    fail "Creation du dossier isole impossible"
 
-for i in "${!SOURCES[@]}"; do
-    source="${SOURCES[$i]}"
-    destination="${DESTINATIONS[$i]}"
+mkdir -p "$WORK/moteurs"
 
-    [[ -f "$source" ]] ||
-        erreur "Original absent : <$source>"
+info "Audit isole : $WORK"
 
-    [[ ! -e "$destination" ]] ||
-        erreur "Destination deja existante : $destination"
-done
-
-[[ ! -e "moteurs/__init__.py" ]] ||
-    erreur "Package moteurs deja present"
-
-[[ ! -e "verification_moteurs_v24.py" ]] ||
-    erreur "Diagnostic V2.4 deja present"
-
-# ============================================================
-# 2. CREATION DE LA BRANCHE
-# ============================================================
-
-info "Creation de la branche de reparation"
-
-git switch -c "$BRANCHE"
-
-# ============================================================
-# 3. RESTAURATION NON DESTRUCTIVE
-# ============================================================
-
-info "Creation des copies normalisees"
-
-mkdir -p moteurs
-
-for i in "${!SOURCES[@]}"; do
-    source="${SOURCES[$i]}"
-    destination="${DESTINATIONS[$i]}"
-
-    cp -- "$source" "$destination"
-
-    hash_source="$(git hash-object -- "$source")"
-    hash_copie="$(git hash-object -- "$destination")"
-
-    [[ "$hash_source" == "$hash_copie" ]] ||
-        erreur "Copie non conforme : $destination"
-
-    printf 'OK : <%s> -> <%s>\n' \
-        "$source" "$destination"
-done
-
-cat > moteurs/__init__.py <<'PY'
-"""
-X1000 V2.4 - Package des cinq moteurs.
-
-Copies de travail des modules originaux.
-Aucune collecte, publication ou validation automatique.
-"""
-
-VERSION = "2.4"
-PY
-
-# ============================================================
-# 4. DIAGNOSTIC GENERAL RENFORCE
-# ============================================================
-
-info "Installation du diagnostic technique"
-
-cat > verification_moteurs_v24.py <<'PY'
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-X1000 V2.4 - Audit technique M1 a M5.
-
-Lecture seule :
-- Controle des fichiers et des imports.
-- Controle de la syntaxe Python.
-- Verification du contrat commun.
-- Verification des cinq autotests.
-
-Aucune donnee PMU.
-Aucune publication.
-Aucun FIGE.
-Aucune modification des archives.
-"""
-
-from __future__ import annotations
-
+"$PYTHON" -B - "$ROOT" "$WORK" <<'PY'
+from pathlib import Path
 import ast
 import hashlib
-import importlib
 import json
-import os
-import subprocess
+import shutil
 import sys
 
-from pathlib import Path
+root = Path(sys.argv[1]).resolve()
+work = Path(sys.argv[2]).resolve()
 
+names = [
+    "m1",
+    "m2",
+    "m3",
+    "m4",
+    "m5",
+    "noyau_commun",
+]
 
-RACINE = Path(__file__).resolve().parent
-PACKAGE = RACINE / "moteurs"
-
-MOTEURS = ("m1", "m2", "m3", "m4", "m5")
-
-SOURCES = {
-    "m1": "m1.py ",
-    "m2": "m2.py ",
-    "m3": "m3.py ",
-    "m4": "m4.py",
-    "m5": "m5.py ",
-    "noyau_commun": "noyau_commun.py",
+ignored = {
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    "dist",
+    "build",
 }
 
+report = {
+    "version": "2.4",
+    "mode": "AUDIT_ISOLE_SANS_EXECUTION",
+    "modules": [],
+    "errors": [],
+    "warnings": [],
+}
 
-def sha256(chemin: Path) -> str:
-    h = hashlib.sha256()
+for name in names:
+    candidates = []
 
-    with chemin.open("rb") as fichier:
-        for bloc in iter(
-            lambda: fichier.read(65536),
-            b"",
+    for path in root.rglob("*.py"):
+        if any(
+            part in ignored
+            for part in path.relative_to(root).parts
         ):
-            h.update(bloc)
+            continue
 
-    return h.hexdigest()
+        if path.is_symlink() or not path.is_file():
+            continue
 
+        if path.stem.strip() == name:
+            candidates.append(path)
 
-def controler_fichier(nom: str) -> dict:
-    original = RACINE / SOURCES[nom]
-    copie = PACKAGE / (nom + ".py")
-
-    resultat = {
-        "nom": nom,
-        "original_present": original.is_file(),
-        "copie_presente": copie.is_file(),
-        "copie_identique": False,
-        "syntaxe_valide": False,
-        "anomalies": [],
-    }
-
-    if not original.is_file():
-        resultat["anomalies"].append(
-            "Original absent"
-        )
-        return resultat
-
-    if not copie.is_file():
-        resultat["anomalies"].append(
-            "Copie absente"
-        )
-        return resultat
-
-    resultat["copie_identique"] = (
-        sha256(original) == sha256(copie)
+    candidates.sort(
+        key=lambda p: str(p.relative_to(root))
     )
 
-    if not resultat["copie_identique"]:
-        resultat["anomalies"].append(
-            "Copie differente de l'original"
-        )
-
-    try:
-        source = copie.read_text(
-            encoding="utf-8"
-        )
-
-        arbre = ast.parse(
-            source,
-            filename=str(copie),
-        )
-
-        compile(
-            arbre,
-            str(copie),
-            "exec",
-        )
-
-        resultat["syntaxe_valide"] = True
-
-        if nom != "noyau_commun":
-            fonctions = {
-                noeud.name
-                for noeud in arbre.body
-                if isinstance(
-                    noeud,
-                    (
-                        ast.FunctionDef,
-                        ast.AsyncFunctionDef,
-                    ),
-                )
-            }
-
-            if "analyser_course" not in fonctions:
-                resultat["anomalies"].append(
-                    "analyser_course absente"
-                )
-
-    except (
-        SyntaxError,
-        OSError,
-        UnicodeError,
-        ValueError,
-    ) as erreur:
-        resultat["anomalies"].append(
-            f"Erreur de syntaxe : {erreur}"
-        )
-
-    return resultat
-
-
-def verifier_import(nom: str) -> dict:
-    module = f"moteurs.{nom}"
-
-    resultat = {
-        "module": module,
-        "import_reussi": False,
-        "version": None,
-        "analyser_course": False,
-        "erreur": None,
+    entry = {
+        "name": name,
+        "candidates": [
+            str(p.relative_to(root))
+            for p in candidates
+        ],
     }
 
+    if len(candidates) != 1:
+        entry["status"] = "AMBIGU"
+        report["errors"].append(
+            f"{name}: {len(candidates)} source(s)"
+        )
+        report["modules"].append(entry)
+        continue
+
+    src = candidates[0]
+    dest = work / "moteurs" / (name + ".py")
+
     try:
-        importe = importlib.import_module(
-            module
+        if not src.resolve().is_relative_to(root):
+            raise ValueError("Source hors depot")
+
+        data = src.read_bytes()
+
+        # Verification sans execution.
+        compile(data, str(src), "exec")
+
+        shutil.copyfile(src, dest)
+
+        def sha256(content):
+            return hashlib.sha256(content).hexdigest()
+
+        if sha256(data) != sha256(dest.read_bytes()):
+            raise ValueError("Copie non conforme")
+
+        tree = ast.parse(
+            data,
+            filename=str(src),
         )
 
-        resultat["import_reussi"] = True
-        resultat["version"] = getattr(
-            importe,
-            "VERSION",
-            None,
-        )
-
-        resultat["analyser_course"] = callable(
-            getattr(
-                importe,
-                "analyser_course",
-                None,
+        functions = sorted(
+            node.name
+            for node in tree.body
+            if isinstance(
+                node,
+                (ast.FunctionDef, ast.AsyncFunctionDef),
             )
         )
 
-    except Exception as erreur:
-        resultat["erreur"] = (
-            f"{type(erreur).__name__}: {erreur}"
-        )
+        entry.update({
+            "status": "SYNTAXE_OK",
+            "sha256": sha256(data),
+            "functions": functions,
+            "copy": str(dest),
+        })
 
-    return resultat
-
-
-def verifier_autotest(nom: str) -> dict:
-    module = f"moteurs.{nom}"
-
-    environnement = os.environ.copy()
-    environnement["PYTHONDONTWRITEBYTECODE"] = "1"
-    environnement["PYTHONNOUSERSITE"] = "1"
-
-    try:
-        processus = subprocess.run(
-            [
-                sys.executable,
-                "-B",
-                "-m",
-                module,
-                "--self-test",
-            ],
-            cwd=RACINE,
-            env=environnement,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-
-        return {
-            "module": module,
-            "code_retour": processus.returncode,
-            "reussi": processus.returncode == 0,
-            "stdout": processus.stdout[-3000:],
-            "stderr": processus.stderr[-3000:],
-        }
+        if (
+            name != "noyau_commun"
+            and "analyser_course" not in functions
+        ):
+            report["warnings"].append(
+                f"{name}: contrat analyser_course "
+                "a confirmer"
+            )
 
     except (
         OSError,
-        subprocess.TimeoutExpired,
-    ) as erreur:
-        return {
-            "module": module,
-            "code_retour": None,
-            "reussi": False,
-            "erreur": str(erreur),
-        }
-
-
-def main() -> int:
-    noms = (*MOTEURS, "noyau_commun")
-
-    fichiers = [
-        controler_fichier(nom)
-        for nom in noms
-    ]
-
-    imports = [
-        verifier_import(nom)
-        for nom in noms
-    ]
-
-    autotests = [
-        verifier_autotest(nom)
-        for nom in MOTEURS
-    ]
-
-    fichiers_ok = all(
-        item["original_present"]
-        and item["copie_presente"]
-        and item["copie_identique"]
-        and item["syntaxe_valide"]
-        and not item["anomalies"]
-        for item in fichiers
-    )
-
-    imports_ok = all(
-        item["import_reussi"]
-        and item["version"] == "2.4"
-        and (
-            item["module"] == "moteurs.noyau_commun"
-            or item["analyser_course"]
+        SyntaxError,
+        ValueError,
+        UnicodeError,
+    ) as exc:
+        entry["status"] = "ERREUR"
+        entry["error"] = str(exc)
+        report["errors"].append(
+            f"{name}: {exc}"
         )
-        for item in imports
+
+    report["modules"].append(entry)
+
+report["status"] = (
+    "CONTROLE_STATIQUE_REUSSI"
+    if not report["errors"]
+    else "CORRECTIONS_NECESSAIRES"
+)
+
+path = work / "rapport_audit_v24.json"
+
+path.write_text(
+    json.dumps(
+        report,
+        ensure_ascii=False,
+        indent=2,
+    ) + "\n",
+    encoding="utf-8",
+)
+
+print(
+    json.dumps(
+        report,
+        ensure_ascii=False,
+        indent=2,
     )
+)
 
-    autotests_ok = all(
-        item["reussi"]
-        for item in autotests
-    )
+print(f"\nRAPPORT : {path}")
 
-    conforme = (
-        fichiers_ok
-        and imports_ok
-        and autotests_ok
-    )
-
-    rapport = {
-        "application": "X1000 V2.4",
-        "type": "AUDIT_TECHNIQUE",
-        "statut": (
-            "CONTROLES_TECHNIQUES_REUSSIS"
-            if conforme
-            else "CORRECTIONS_NECESSAIRES"
-        ),
-        "lecture_seule": True,
-        "collecte_pmu": False,
-        "publication": False,
-        "fige_automatique": False,
-        "modification_archives": False,
-        "validation_officielle_pmu": False,
-        "fichiers": fichiers,
-        "imports": imports,
-        "autotests": autotests,
-    }
-
-    print(
-        json.dumps(
-            rapport,
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
-
-    return 0 if conforme else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+sys.exit(
+    0 if not report["errors"] else 1
+)
 PY
 
-# ============================================================
-# 5. VERIFICATION DE SYNTAXE SANS PYC
-# ============================================================
-
-info "Verification de syntaxe"
-
-"$PYTHON" -B - <<'PY'
-from pathlib import Path
-
-fichiers = [
-    *sorted(Path("moteurs").glob("*.py")),
-    Path("verification_moteurs_v24.py"),
-]
-
-for fichier in fichiers:
-    source = fichier.read_bytes()
-    compile(source, str(fichier), "exec")
-    print(f"SYNTAXE OK : {fichier}")
-PY
-
-# ============================================================
-# 6. AUDIT GENERAL ET AUTOTESTS
-# ============================================================
-
-info "Execution du diagnostic M1-M5"
-
-"$PYTHON" -B verification_moteurs_v24.py
-
-# ============================================================
-# 7. CONTROLE FINAL DES ORIGINAUX
-# ============================================================
-
-info "Verification de l'integrite des originaux"
-
-for i in "${!SOURCES[@]}"; do
-    source="${SOURCES[$i]}"
-
-    git diff --quiet HEAD -- "$source" ||
-        erreur "Original modifie : $source"
-
-    git diff --cached --quiet HEAD -- "$source" ||
-        erreur "Original indexe comme modifie : $source"
-done
-
-# Aucune modification suivie ne doit exister.
-git diff --quiet HEAD ||
-    erreur "Un fichier suivi a ete modifie"
-
-git diff --cached --quiet HEAD ||
-    erreur "Une modification indexee a ete detectee"
-
-info "Fichiers nouveaux"
-
-git status --short --untracked-files=all
-
-# ============================================================
-# 8. RESULTAT
-# ============================================================
-
-printf '\n========================================\n'
-printf 'X1000 V2.4 - REPARATION PREPAREE\n'
-printf '========================================\n'
-printf 'Branche : %s\n' "$BRANCHE"
-printf 'Originaux : preserves\n'
-printf 'Archives : non modifiees\n'
-printf 'Collecte PMU : aucune\n'
-printf 'Publication : aucune\n'
-printf 'FIGE automatique : aucun\n'
-printf 'Commit : aucun\n'
-printf 'Push : aucun\n'
-printf 'Fusion : aucune\n'
-printf '========================================\n'
-
-printf '\nEtapes suivantes :\n'
-printf '1. Examiner les nouveaux fichiers.\n'
-printf '2. Examiner le rapport du diagnostic.\n'
-printf '3. Corriger toute incompatibilite detectee.\n'
-printf '4. Faire valider les tests avant commit.\n'
+info "Audit statique termine."
+info "Originaux preserves."
+info "Archives non modifiees."
+info "Aucun moteur execute."
+info "Aucun FIGE cree."
+info "Aucun commit."
+info "Aucun push."
+info "Aucune publication."
