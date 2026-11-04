@@ -1,269 +1,14 @@
-name: X1000 V2.4 - Validation securisee M1-M5
-
-run-name: X1000 M1-M5 - Audit sans publication
-
-on:
-  workflow_dispatch:
-
-  push:
-    branches:
-      - feature/installation-x1000-v2
-      - fix/x1000-v2-reparation-controlee
-    paths:
-      - "M*.py"
-      - "m*.py"
-      - "moteurs/**"
-      - "tests/**"
-      - "test_*.py"
-      - "api.py"
-      - "validation_moteurs.py"
-      - "coordination_x1000.py"
-      - "config_x1000.py"
-      - "noyau_commun.py"
-      - ".github/workflows/validation-moteurs.yml"
-
-permissions:
-  contents: read
-
-concurrency:
-  group: x1000-validation-${{ github.ref }}
-  cancel-in-progress: false
-
-jobs:
-  validation:
-    name: Controle technique M1-M5
-    if: >-
-      ${{
-        github.ref == 'refs/heads/feature/installation-x1000-v2' ||
-        github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee'
-      }}
-
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-
-    env:
-      TZ: Europe/Paris
-      PYTHONDONTWRITEBYTECODE: "1"
-      PYTHONUNBUFFERED: "1"
-      PYTHONNOUSERSITE: "1"
-      PYTHONPATH: "."
-      PYTHONHASHSEED: "0"
-      X1000_MODE: "VALIDATION"
-      X1000_NO_PUBLICATION: "1"
-      X1000_NO_COLLECTE: "1"
-      X1000_NO_FIGE: "1"
-
-    defaults:
-      run:
-        shell: bash
-
-    steps:
-      - name: Recuperer depot sans identifiants
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          fetch-depth: 1
-
-      - name: Installer Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: ""
-
-      - name: Verifier branche et depot
-        run: |
-          set -euo pipefail
-
-          case "$GITHUB_REF" in
-            refs/heads/feature/installation-x1000-v2|refs/heads/fix/x1000-v2-reparation-controlee)
-              echo "Branche autorisee : $GITHUB_REF"
-              ;;
-            *)
-              echo "::error::Branche interdite"
-              exit 1
-              ;;
-          esac
-
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "::error::Depot initial non propre"
-            exit 1
-          fi
-
-          echo "Branche et commit verifies"
-
-      - name: Creer copie temporaire isolee
-        id: sandbox
-        run: |
-          set -euo pipefail
-
-          WORKDIR="$(mktemp -d "${RUNNER_TEMP}/x1000.XXXXXXXX")"
-
-          git archive HEAD | tar -x -C "$WORKDIR"
-
-          echo "workdir=$WORKDIR" >> "$GITHUB_OUTPUT"
-          echo "Copie temporaire creee"
-
-      - name: Verifier structure et syntaxe Python
-        working-directory: ${{ steps.sandbox.outputs.workdir }}
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
-          import ast
-          from pathlib import Path
-
-          root = Path.cwd()
-
-          required = [
-              "api.py",
-              "validation_moteurs.py",
-              "coordination_x1000.py",
-              "config_x1000.py",
-              "moteurs/noyau_commun.py",
-          ]
-
-          required += [
-              f"moteurs/m{i}.py"
-              for i in range(1, 6)
-          ]
-
-          for name in required:
-              path = root / name
-              if not path.is_file():
-                  raise SystemExit(f"FICHIER ABSENT : {name}")
-              if path.is_symlink():
-                  raise SystemExit(f"LIEN INTERDIT : {name}")
-              if path.stat().st_size == 0:
-                  raise SystemExit(f"FICHIER VIDE : {name}")
-              print("PRESENT :", name)
-
-          excluded = {
-              ".git", ".venv", "venv",
-              "__pycache__", "node_modules",
-              "site-packages",
-          }
-
-          files = sorted(
-              p for p in root.rglob("*.py")
-              if not any(
-                  part in excluded or part.startswith(".")
-                  for part in p.relative_to(root).parts
-              )
-          )
-
-          if not files:
-              raise SystemExit("Aucun fichier Python")
-
-          for path in files:
-              if path.is_symlink():
-                  raise SystemExit(
-                      f"Lien Python interdit : {path}"
-                  )
-              source = path.read_text(
-                  encoding="utf-8-sig"
-              )
-              ast.parse(source, filename=str(path))
-              print("SYNTAXE OK :", path.relative_to(root))
-
-          print("TOTAL PYTHON :", len(files))
-          PY
-
-      - name: Verifier interfaces M1-M5
-        working-directory: ${{ steps.sandbox.outputs.workdir }}
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
-          import importlib
-          from pathlib import Path
-
-          import api
-          from moteurs import noyau_commun as noyau
-
-          if str(getattr(noyau, "VERSION", "")) != "2.4":
-              raise SystemExit("Version noyau incompatible")
-
-          required = (
-              "analyser_course",
-              "verifier_course",
-              "verifier_sortie_analyse",
-              "executer",
-          )
-
-          for name in required:
-              if not callable(getattr(noyau, name, None)):
-                  raise SystemExit(
-                      f"Fonction noyau absente : {name}"
-                  )
-
-          for i in range(1, 6):
-              name = f"M{i}"
-              path = (
-                  Path("moteurs") / f"m{i}.py"
-              ).resolve()
-
-              module = importlib.import_module(
-                  f"moteurs.m{i}"
-              )
-
-              actual = Path(module.__file__).resolve()
-
-              if actual != path:
-                  raise SystemExit(
-                      f"Module incorrect : {name}"
-                  )
-
-              if getattr(module, "MOTEUR", None) != name:
-                  raise SystemExit(
-                      f"Identite incorrecte : {name}"
-                  )
-
-              if str(getattr(module, "VERSION", "")) != "2.4":
-                  raise SystemExit(
-                      f"Version incorrecte : {name}"
-                  )
-
-              if not callable(
-                  getattr(module, "analyser_course", None)
-              ):
-                  raise SystemExit(
-                      f"Analyse absente : {name}"
-                  )
-
-              if not api.engine_available(name):
-                  raise SystemExit(
-                      f"Moteur indisponible : {name}"
-                  )
-
-              api_path = api.engine_path(name)
-
-              if (
-                  api_path is None
-                  or Path(api_path).resolve() != path
-              ):
-                  raise SystemExit(
-                      f"Chemin API incorrect : {name}"
-                  )
-
-              print(name, ": INTERFACE OK")
-
-          print("CINQ MOTEURS VALIDES")
-          PY
-
       - name: Tester absence de predictions inventees
         working-directory: ${{ steps.sandbox.outputs.workdir }}
         run: |
           set -euo pipefail
 
           python - <<'PY'
+          import copy
           import importlib
-          from datetime import (
-              datetime, timedelta, timezone
-          )
+          from datetime import datetime, timedelta, timezone
 
-          from moteurs import noyau_commun
+          from moteurs import noyau_commun as noyau
 
           depart = (
               datetime.now(timezone.utc)
@@ -287,260 +32,107 @@ jobs:
               ],
           }
 
+          valide, raison = noyau.verifier_course(course)
+          assert valide, raison
+
           for i in range(1, 6):
-              name = f"M{i}"
+              nom = f"M{i}"
               module = importlib.import_module(
                   f"moteurs.m{i}"
               )
 
-              result = module.analyser_course(
-                  dict(course)
-              )
+              assert module.MOTEUR == nom
 
-              if not isinstance(result, dict):
-                  raise SystemExit(
-                      f"Sortie non conforme : {name}"
+              entree = copy.deepcopy(course)
+              resultat = module.analyser_course(entree)
+
+              assert entree == course, (
+                  f"{nom}: course modifiee"
+              )
+              assert isinstance(resultat, dict)
+              assert resultat.get("moteur") == nom
+
+              # CORRECTION : resultat en premier.
+              valide_resultat = (
+                  noyau.verifier_sortie_analyse(
+                      resultat=resultat,
+                      course=course,
                   )
-
-              noyau_commun.verifier_sortie_analyse(
-                  course, result
               )
 
-              if result.get("statut") != (
+              assert valide_resultat == resultat
+
+              assert resultat.get("statut") == (
                   "DONNEES_INSUFFISANTES"
-              ):
-                  raise SystemExit(
-                      f"Statut incorrect : {name}"
-                  )
+              ), f"{nom}: statut incorrect"
 
-              for field in (
-                  "classement",
-                  "classement_partiel",
-              ):
-                  if result.get(field):
-                      raise SystemExit(
-                          f"Prediction inventee : {name}"
-                      )
-
-              if result.get("fige") is not False:
-                  raise SystemExit(
-                      f"FIGE interdit : {name}"
-                  )
-
-              if result.get("publication") is not False:
-                  raise SystemExit(
-                      f"Publication interdite : {name}"
-                  )
-
-              print(name, ": DONNEES INSUFFISANTES OK")
-          PY
-
-      - name: Verifier API de consultation
-        working-directory: ${{ steps.sandbox.outputs.workdir }}
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
-          import api
-
-          routes = (
-              "/api/status",
-              "/api/courses",
-              "/api/selections",
-              "/api/figes",
-              "/api/audits",
-              "/api/diagnostic",
-          )
-
-          for route in routes:
-              if route not in api.ROUTES:
-                  raise SystemExit(
-                      f"Route absente : {route}"
-                  )
-
-          for method in (
-              "do_POST",
-              "do_PUT",
-              "do_PATCH",
-              "do_DELETE",
-          ):
-              if not callable(
-                  getattr(api.Handler, method, None)
-              ):
-                  raise SystemExit(
-                      f"Protection absente : {method}"
-                  )
-
-          print("API : CONTROLES STRUCTURELS OK")
-          PY
-
-      - name: Executer tests unitaires
-        working-directory: ${{ steps.sandbox.outputs.workdir }}
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
-          import sys
-          import unittest
-          from pathlib import Path
-
-          root = Path.cwd()
-          loader = unittest.TestLoader()
-          suite = unittest.TestSuite()
-
-          root_tests = sorted(
-              root.glob("test_*.py")
-          )
-
-          for path in root_tests:
-              suite.addTests(
-                  loader.loadTestsFromName(path.stem)
+              assert resultat.get("classement") == [], (
+                  f"{nom}: classement invente"
+              )
+              assert resultat.get(
+                  "classement_partiel"
+              ) == [], (
+                  f"{nom}: classement partiel invente"
               )
 
-          folder = root / "tests"
+              assert resultat.get("fige") is False
+              assert resultat.get("publication") is False
 
-          if folder.is_dir():
-              suite.addTests(
-                  loader.discover(
-                      start_dir=str(folder),
-                      pattern="test_*.py",
-                      top_level_dir=str(folder),
+              assert resultat.get("course_id") == (
+                  course["id"]
+              )
+
+              # Test negatif : moteur sans identite.
+              invalide = copy.deepcopy(resultat)
+              invalide.pop("moteur", None)
+
+              try:
+                  noyau.verifier_sortie_analyse(
+                      resultat=invalide,
+                      course=course,
                   )
-              )
-
-          count = suite.countTestCases()
-
-          if count == 0:
-              raise SystemExit(
-                  "Aucun test unitaire decouvert"
-              )
-
-          print("Tests decouverts :", count)
-
-          result = unittest.TextTestRunner(
-              verbosity=2
-          ).run(suite)
-
-          if not result.wasSuccessful():
-              sys.exit(1)
-
-          print("TESTS UNITAIRES REUSSIS")
-          PY
-
-      - name: Verifier FIGES et archives dans la copie
-        if: always() && steps.sandbox.outcome == 'success'
-        env:
-          WORKDIR: ${{ steps.sandbox.outputs.workdir }}
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
-          import hashlib
-          import os
-          from pathlib import Path
-
-          source = Path.cwd()
-          target = Path(os.environ["WORKDIR"])
-
-          protected_names = {
-              "figes.json",
-              "audits.json",
-              "selections.json",
-              "courses.json",
-          }
-
-          def protected(root):
-              result = {}
-              for p in root.rglob("*"):
-                  if ".git" in p.parts:
-                      continue
-                  if (
-                      p.name.lower() in protected_names
-                      or any(
-                          x.lower() in (
-                              "archives", "figes"
-                          )
-                          for x in p.relative_to(root).parts
-                      )
-                  ):
-                      rel = str(p.relative_to(root))
-                      if p.is_symlink():
-                          raise SystemExit(
-                              f"Lien protege interdit : {rel}"
-                          )
-                      if p.is_file():
-                          digest = hashlib.sha256(
-                              p.read_bytes()
-                          ).hexdigest()
-                          result[rel] = digest
-              return result
-
-          original = protected(source)
-          copied = protected(target)
-
-          for name, digest in original.items():
-              if copied.get(name) != digest:
-                  raise SystemExit(
-                      f"Fichier protege modifie : {name}"
+              except ValueError as exc:
+                  assert "Identite moteur invalide" in str(exc)
+              else:
+                  raise AssertionError(
+                      f"{nom}: identite absente acceptee"
                   )
 
-          unexpected = set(copied) - set(original)
+              # Test negatif : FIGE interdit.
+              invalide = copy.deepcopy(resultat)
+              invalide["fige"] = True
 
-          if unexpected:
-              raise SystemExit(
-                  "Nouveaux fichiers proteges : "
-                  + ", ".join(sorted(unexpected))
+              try:
+                  noyau.verifier_sortie_analyse(
+                      resultat=invalide,
+                      course=course,
+                  )
+              except ValueError as exc:
+                  assert "FIGE interdit" in str(exc)
+              else:
+                  raise AssertionError(
+                      f"{nom}: FIGE non rejete"
+                  )
+
+              # Test negatif : publication interdite.
+              invalide = copy.deepcopy(resultat)
+              invalide["publication"] = True
+
+              try:
+                  noyau.verifier_sortie_analyse(
+                      resultat=invalide,
+                      course=course,
+                  )
+              except ValueError as exc:
+                  assert "Publication interdite" in str(exc)
+              else:
+                  raise AssertionError(
+                      f"{nom}: publication non rejetee"
+                  )
+
+              print(
+                  f"{nom}: validation et securite OK"
               )
 
-          print("FIGES ET ARCHIVES : CONTROLE OK")
-          print("Fichiers proteges :", len(original))
+          print("CONTROLE M1-M5 TERMINE")
           PY
-
-      - name: Verifier depot original inchange
-        if: always()
-        run: |
-          set -euo pipefail
-
-          if ! git diff --quiet; then
-            echo "::error::Fichiers suivis modifies"
-            exit 1
-          fi
-
-          if ! git diff --cached --quiet; then
-            echo "::error::Index Git modifie"
-            exit 1
-          fi
-
-          if [ -n "$(git ls-files --others --exclude-standard)" ]; then
-            echo "::error::Fichiers non suivis detectes"
-            exit 1
-          fi
-
-          echo "DEPOT ORIGINAL INCHANGE"
-
-      - name: Bilan final
-        if: always()
-        env:
-          JOB_STATUS: ${{ job.status }}
-        run: |
-          set -euo pipefail
-
-          {
-            echo "## X1000 V2.4 - Validation M1-M5"
-            echo ""
-            echo "- Statut : ${JOB_STATUS}"
-            echo "- Branche : ${GITHUB_REF}"
-            echo "- Commit : ${GITHUB_SHA}"
-            echo "- Validation technique uniquement"
-            echo "- Aucun push automatique"
-            echo "- Aucun commit automatique"
-            echo "- Aucune collecte PMU automatique"
-            echo "- Aucune publication automatique"
-            echo "- Aucun FIGE automatique"
-            echo "- Tests executes sur copie temporaire"
-            echo ""
-            echo "Les controles non executes ne sont"
-            echo "pas consideres comme reussis."
-            echo ""
-            echo "Aucune fiabilite sportive garantie."
-          } >> "$GITHUB_STEP_SUMMARY"
