@@ -2,28 +2,44 @@
 # -*- coding: utf-8 -*-
 
 """
-X1000 V2.4 - M3 : OUTSIDERS ET FAVORIS VULNERABLES
+X1000 V2.4 — M3 : OUTSIDERS ET FAVORIS VULNERABLES
 
-Analyse sportive independante.
-Detection des outsiders et favoris a examiner.
+MISSION
+-------
+Analyse sportive indépendante des chevaux.
 
-Garanties :
-- Courses PMU physiquement disputees en France.
-- Donnees sportives documentees.
-- Cinq positions predites si donnees suffisantes.
-- Moteur M3 independant de M1, M2, M4 et M5.
-- Aucune donnee inventee.
-- Aucun FIGE automatique ou retroactif.
-- Aucune publication.
+Détecter :
+- Les outsiders présentant des indicateurs favorables.
+- Les favoris dont les indicateurs sont faibles.
+- Cinq positions prédites si les données sont suffisantes.
+
+CRITERES
+--------
+Forme              : 25 %
+Progression         : 25 %
+Aptitude parcours   : 20 %
+Régularité          : 15 %
+Potentiel surprise  : 15 %
+
+SECURITE
+--------
+- Courses PMU physiquement disputées en France.
+- Vérifications techniques déléguées au noyau commun.
+- Données sportives documentées.
+- Aucune donnée inventée.
+- Aucun FIGE automatique ou rétroactif.
 - Aucune collecte PMU.
+- Aucune publication automatique.
 - Aucune modification des archives.
+- Aucune écriture dans le dépôt.
 
-Les validations techniques sont deleguees
-au noyau commun X1000 V2.4.
+M3 conserve son indépendance sportive.
 """
 
 from __future__ import annotations
 
+import argparse
+import copy
 import math
 import sys
 
@@ -32,28 +48,13 @@ from typing import Any
 
 
 # ============================================================
-# 1. IMPORT DU NOYAU COMMUN
-# ============================================================
-
-if __package__:
-    from . import noyau_commun
-else:
-    import noyau_commun
-
-
-analyse_commune = noyau_commun.analyser_course
-executer = noyau_commun.executer
-
-
-# ============================================================
-# 2. IDENTITE ET CONFIGURATION M3
+# 1. IDENTITE ET CONFIGURATION M3
 # ============================================================
 
 MOTEUR = "M3"
 VERSION = "2.4"
 
 CHAMP = "indicateurs_m3"
-
 COUVERTURE_MIN = 0.65
 
 POIDS = {
@@ -70,73 +71,82 @@ SEUIL_SCORE_OUTSIDER = 70.0
 SEUIL_COTE_FAVORI = 4.0
 SEUIL_SCORE_FAVORI_FAIBLE = 55.0
 
+STATUTS_ATTENDUS = frozenset({
+    "ANALYSE_DISPONIBLE",
+    "DONNEES_INSUFFISANTES",
+    "NON_ANALYSABLE",
+})
+
 
 # ============================================================
-# 3. VERIFICATION DU NOYAU ET DE LA CONFIGURATION
+# 2. IMPORT CONTROLE DU NOYAU COMMUN
 # ============================================================
 
-def verifier_noyau() -> None:
-    """Verifie la compatibilite du moteur M3."""
+noyau_commun = None
+ERREUR_IMPORT = None
 
-    version = getattr(
-        noyau_commun,
-        "VERSION",
-        None,
-    )
+try:
+    if __package__:
+        from . import noyau_commun
+    else:
+        import noyau_commun
 
-    if version != VERSION:
+except ImportError as erreur:
+    ERREUR_IMPORT = erreur
+
+
+# ============================================================
+# 3. VALIDATION CONFIGURATION M3
+# ============================================================
+
+def verifier_configuration_locale() -> None:
+    """Valide les paramètres indépendants de M3."""
+
+    if MOTEUR != "M3":
+        raise RuntimeError("Identité M3 invalide")
+
+    if not isinstance(VERSION, str) or not VERSION:
+        raise RuntimeError("Version M3 invalide")
+
+    if CHAMP != "indicateurs_m3":
+        raise RuntimeError("Champ M3 invalide")
+
+    criteres = {
+        "forme",
+        "progression",
+        "aptitude_parcours",
+        "regularite",
+        "potentiel_surprise",
+    }
+
+    if not isinstance(POIDS, dict):
+        raise RuntimeError("Pondérations M3 invalides")
+
+    if set(POIDS) != criteres:
         raise RuntimeError(
-            "Version du noyau incompatible : "
-            f"M3={VERSION}, noyau={version}"
-        )
-
-    if not callable(analyse_commune):
-        raise RuntimeError(
-            "Analyse commune indisponible"
-        )
-
-    if not callable(executer):
-        raise RuntimeError(
-            "Execution commune indisponible"
-        )
-
-    if not isinstance(CHAMP, str) or not CHAMP.strip():
-        raise RuntimeError(
-            "Champ M3 invalide"
-        )
-
-    if not isinstance(POIDS, dict) or not POIDS:
-        raise RuntimeError(
-            "Ponderations M3 absentes"
+            "Les cinq critères M3 sont obligatoires"
         )
 
     for critere, poids in POIDS.items():
 
-        if (
-            not isinstance(critere, str)
-            or not critere.strip()
-        ):
+        if type(poids) not in (int, float):
             raise RuntimeError(
-                "Critere M3 invalide"
+                f"Poids non numérique : {critere}"
             )
 
-        if (
-            type(poids) not in (int, float)
-            or not math.isfinite(poids)
-            or poids <= 0
-        ):
+        if not math.isfinite(poids) or poids <= 0:
             raise RuntimeError(
-                f"Poids M3 invalide : {critere}"
+                f"Poids invalide : {critere}"
             )
 
     if not math.isclose(
         math.fsum(POIDS.values()),
         1.0,
-        rel_tol=0,
+        rel_tol=0.0,
         abs_tol=1e-9,
     ):
         raise RuntimeError(
-            "Somme des ponderations M3 invalide"
+            "La somme des pondérations doit être égale à 1"
         )
 
     if (
@@ -148,21 +158,86 @@ def verifier_noyau() -> None:
             "Couverture minimale M3 invalide"
         )
 
+    seuils = (
+        SEUIL_COTE_OUTSIDER,
+        SEUIL_SCORE_OUTSIDER,
+        SEUIL_COTE_FAVORI,
+        SEUIL_SCORE_FAVORI_FAIBLE,
+    )
+
+    if any(
+        type(x) not in (int, float)
+        or not math.isfinite(x)
+        for x in seuils
+    ):
+        raise RuntimeError("Seuils M3 invalides")
+
+    if not (
+        1 < SEUIL_COTE_FAVORI < SEUIL_COTE_OUTSIDER
+    ):
+        raise RuntimeError(
+            "Seuils de cotes incohérents"
+        )
+
+    if not (
+        0 <= SEUIL_SCORE_FAVORI_FAIBLE
+        < SEUIL_SCORE_OUTSIDER <= 100
+    ):
+        raise RuntimeError(
+            "Seuils de scores incohérents"
+        )
+
+
+# ============================================================
+# 4. VALIDATION DU NOYAU COMMUN
+# ============================================================
+
+def verifier_noyau() -> None:
+    """Vérifie la compatibilité M3 / noyau commun."""
+
+    verifier_configuration_locale()
+
+    if noyau_commun is None:
+        raise RuntimeError(
+            "Noyau commun indisponible : "
+            f"{ERREUR_IMPORT}"
+        )
+
+    version = getattr(
+        noyau_commun,
+        "VERSION",
+        None,
+    )
+
+    if str(version) != VERSION:
+        raise RuntimeError(
+            f"Version incompatible : "
+            f"M3={VERSION}, noyau={version}"
+        )
+
+    if not callable(
+        getattr(noyau_commun, "analyser_course", None)
+    ):
+        raise RuntimeError(
+            "Fonction analyser_course indisponible"
+        )
+
+    if not callable(
+        getattr(noyau_commun, "executer", None)
+    ):
+        raise RuntimeError(
+            "Fonction executer indisponible"
+        )
+
     statuts = getattr(
         noyau_commun,
         "STATUTS_VALIDES",
         None,
     )
 
-    statuts_attendus = {
-        "ANALYSE_DISPONIBLE",
-        "DONNEES_INSUFFISANTES",
-        "NON_ANALYSABLE",
-    }
-
     if (
         not isinstance(statuts, (set, frozenset))
-        or statuts != statuts_attendus
+        or statuts != STATUTS_ATTENDUS
     ):
         raise RuntimeError(
             "Statuts du noyau incompatibles"
@@ -170,60 +245,53 @@ def verifier_noyau() -> None:
 
 
 # ============================================================
-# 4. VALIDATION DES DATES
+# 5. VALIDATION DES DATES
 # ============================================================
 
-def lire_date(
-    valeur: Any,
-) -> datetime | None:
-    """Lit une date ISO avec fuseau horaire."""
+def lire_date(valeur: Any) -> datetime | None:
+    """Lit une date ISO avec fuseau horaire explicite."""
 
     if not isinstance(valeur, str):
         return None
 
+    valeur = valeur.strip()
+
+    if not valeur:
+        return None
+
     try:
-        date = datetime.fromisoformat(
-            valeur.strip().replace(
-                "Z",
-                "+00:00",
-            )
-        )
+        if valeur.endswith("Z"):
+            valeur = valeur[:-1] + "+00:00"
+
+        date = datetime.fromisoformat(valeur)
 
         if date.utcoffset() is None:
             return None
 
         return date.astimezone(timezone.utc)
 
-    except (
-        ValueError,
-        TypeError,
-        OverflowError,
-    ):
+    except (ValueError, TypeError, OverflowError):
         return None
 
 
 # ============================================================
-# 5. VALIDATION DES COTES
+# 6. VALIDATION DES COTES
 # ============================================================
 
 def verifier_cote(
     cheval: dict,
-    depart: str,
-) -> tuple[
-    float | None,
-    str | None,
-    str | None,
-]:
+    depart: Any,
+) -> tuple[float | None, str | None, str | None]:
     """
     Accepte uniquement une cote :
-    - numerique et finie ;
-    - superieure a 1 ;
-    - avec source renseignee ;
-    - horodatee avant le depart ;
-    - non datee dans le futur.
+    - Numérique, finie et supérieure à 1.
+    - Avec une source non vide.
+    - Horodatée avec fuseau horaire.
+    - Antérieure au départ.
+    - Non datée dans le futur.
 
-    La presence d'une source ne constitue pas
-    une authentification independante.
+    Une source déclarée ne prouve pas à elle seule
+    l'authenticité de la donnée.
     """
 
     cote = cheval.get("cote")
@@ -235,20 +303,13 @@ def verifier_cote(
 
     try:
         cote = float(cote)
-    except (
-        TypeError,
-        ValueError,
-        OverflowError,
-    ):
+    except (ValueError, TypeError, OverflowError):
         return None, None, None
 
     if not math.isfinite(cote) or cote <= 1:
         return None, None, None
 
-    if (
-        not isinstance(source, str)
-        or not source.strip()
-    ):
+    if not isinstance(source, str) or not source.strip():
         return None, None, None
 
     date_cote = lire_date(collecte_a)
@@ -265,21 +326,15 @@ def verifier_cote(
     if date_cote >= date_depart:
         return None, None, None
 
-    return (
-        cote,
-        source.strip(),
-        collecte_a,
-    )
+    return cote, source.strip(), collecte_a
 
 
 # ============================================================
-# 6. VALIDATION DES SCORES
+# 7. VALIDATION DES SCORES
 # ============================================================
 
-def verifier_score(
-    valeur: Any,
-) -> bool:
-    """Verifie un score compris entre 0 et 100."""
+def verifier_score(valeur: Any) -> bool:
+    """Valide un score numérique entre 0 et 100."""
 
     if valeur is None:
         return True
@@ -291,40 +346,65 @@ def verifier_score(
     )
 
 
+def verifier_entree(
+    entree: Any,
+    champ: str,
+) -> None:
+    """Vérifie une entrée d'analyse ou de classement."""
+
+    if not isinstance(entree, dict):
+        raise RuntimeError(
+            f"Entrée invalide dans {champ}"
+        )
+
+    numero = entree.get("numero")
+
+    if type(numero) is not int or numero <= 0:
+        raise RuntimeError(
+            f"Numéro invalide dans {champ}"
+        )
+
+    if "score" not in entree:
+        raise RuntimeError(
+            f"Score absent dans {champ}"
+        )
+
+    if not verifier_score(entree["score"]):
+        raise RuntimeError(
+            f"Score invalide dans {champ}"
+        )
+
+
 # ============================================================
-# 7. VALIDATION DU RESULTAT COMMUN
+# 8. VALIDATION DU RESULTAT COMMUN
 # ============================================================
 
-def verifier_resultat(
-    resultat: Any,
-) -> None:
-    """Refuse toute sortie commune incoherente."""
+def verifier_resultat(resultat: Any) -> None:
+    """Refuse les sorties incohérentes du noyau."""
 
     if not isinstance(resultat, dict):
         raise RuntimeError(
-            "Resultat commun non conforme"
+            "Résultat commun non conforme"
         )
 
     statut = resultat.get("statut")
 
-    if statut not in noyau_commun.STATUTS_VALIDES:
-        raise RuntimeError(
-            "Statut M3 invalide"
-        )
+    if statut not in STATUTS_ATTENDUS:
+        raise RuntimeError("Statut M3 invalide")
 
     if resultat.get("moteur") != MOTEUR:
         raise RuntimeError(
-            "Identite du moteur incoherente"
+            "Identité du moteur incohérente"
         )
 
     if resultat.get("fige") is not False:
         raise RuntimeError(
-            "FIGE interdit dans M3"
+            "FIGÉ interdit dans la sortie M3"
         )
 
     if resultat.get("publication") is not False:
         raise RuntimeError(
-            "Publication interdite dans M3"
+            "Publication interdite dans la sortie M3"
         )
 
     champs = (
@@ -333,34 +413,29 @@ def verifier_resultat(
         "classement_partiel",
     )
 
-    for cle in champs:
+    for champ in champs:
 
-        if not isinstance(
-            resultat.get(cle),
-            list,
-        ):
+        entrees = resultat.get(champ)
+
+        if not isinstance(entrees, list):
             raise RuntimeError(
-                f"Champ commun invalide : {cle}"
+                f"Champ invalide : {champ}"
             )
 
-        for entree in resultat[cle]:
+        numeros = set()
 
-            if not isinstance(entree, dict):
+        for entree in entrees:
+
+            verifier_entree(entree, champ)
+
+            numero = entree["numero"]
+
+            if numero in numeros:
                 raise RuntimeError(
-                    f"Entree invalide dans {cle}"
+                    f"Doublon dans {champ}"
                 )
 
-            if "score" not in entree:
-                raise RuntimeError(
-                    f"Score absent dans {cle}"
-                )
-
-            if not verifier_score(
-                entree["score"]
-            ):
-                raise RuntimeError(
-                    f"Score invalide dans {cle}"
-                )
+            numeros.add(numero)
 
     classement = resultat["classement"]
     partiel = resultat["classement_partiel"]
@@ -376,98 +451,54 @@ def verifier_resultat(
 
         if classement or len(partiel) >= 5:
             raise RuntimeError(
-                "Classement partiel M3 incoherent"
+                "Classement partiel incohérent"
             )
 
     elif classement or partiel:
         raise RuntimeError(
-            "Classement interdit pour "
-            "une course non analysable"
+            "Classement interdit pour course non analysable"
         )
 
-    for cle in (
-        "classement",
-        "classement_partiel",
-    ):
+    numeros_analyses = {
+        e["numero"]
+        for e in resultat["chevaux_analyses"]
+    }
 
-        numeros = set()
+    for champ in ("classement", "classement_partiel"):
 
         for position_attendue, entree in enumerate(
-            resultat[cle],
+            resultat[champ],
             start=1,
         ):
 
-            numero = entree.get("numero")
-
-            if (
-                type(numero) is not int
-                or numero <= 0
-            ):
+            if entree["numero"] not in numeros_analyses:
                 raise RuntimeError(
-                    "Numero de cheval invalide"
+                    "Cheval classé absent des analyses"
                 )
 
-            if numero in numeros:
-                raise RuntimeError(
-                    "Cheval classe plusieurs fois"
-                )
-
-            numeros.add(numero)
-
             if (
-                type(entree.get("position_predite"))
-                is not int
-                or entree["position_predite"]
-                != position_attendue
+                type(entree.get("position_predite")) is not int
+                or entree["position_predite"] != position_attendue
             ):
                 raise RuntimeError(
-                    "Ordre des positions M3 invalide"
+                    "Position prédite incohérente"
                 )
 
 
 # ============================================================
-# 8. ANALYSE SPORTIVE INDEPENDANTE M3
+# 9. VALIDATION DES PARTANTS
 # ============================================================
 
-def analyser_course(
-    course: Any,
-) -> dict:
-    """
-    Analyse M3 :
-    - evaluation des indicateurs ;
-    - classement de cinq chevaux si possible ;
-    - recherche des outsiders potentiels ;
-    - detection des favoris vulnerables.
-
-    Aucune prediction n'est inventee.
-    """
-
-    verifier_noyau()
-
-    resultat = analyse_commune(
-        course=course,
-        moteur=MOTEUR,
-        poids=POIDS,
-        champ=CHAMP,
-        couverture_min=COUVERTURE_MIN,
-    )
-
-    verifier_resultat(resultat)
-
-    if resultat["statut"] == "NON_ANALYSABLE":
-        return resultat
+def construire_partants(course: Any) -> dict:
+    """Construit la liste des partants actifs vérifiés."""
 
     if not isinstance(course, dict):
-        raise RuntimeError(
-            "Course M3 invalide"
-        )
+        raise RuntimeError("Course M3 invalide")
 
     partants = course.get("partants")
 
     if not isinstance(partants, list):
-        raise RuntimeError(
-            "Partants M3 invalides"
-        )
+        raise RuntimeError("Partants M3 invalides")
 
     chevaux = {}
     numeros_tous = set()
@@ -475,23 +506,18 @@ def analyser_course(
     for cheval in partants:
 
         if not isinstance(cheval, dict):
-            raise RuntimeError(
-                "Cheval M3 invalide"
-            )
+            raise RuntimeError("Cheval M3 invalide")
 
         numero = cheval.get("numero")
 
-        if (
-            type(numero) is not int
-            or numero <= 0
-        ):
+        if type(numero) is not int or numero <= 0:
             raise RuntimeError(
-                "Numero M3 invalide"
+                "Numéro de cheval invalide"
             )
 
         if numero in numeros_tous:
             raise RuntimeError(
-                "Numero de cheval en double"
+                "Numéro de cheval en double"
             )
 
         numeros_tous.add(numero)
@@ -502,54 +528,95 @@ def analyser_course(
             )
 
         if not cheval["non_partant"]:
+
+            nom = cheval.get("nom")
+
+            if not isinstance(nom, str) or not nom.strip():
+                raise RuntimeError(
+                    "Nom du partant invalide"
+                )
+
             chevaux[numero] = cheval
+
+    return chevaux
+
+
+# ============================================================
+# 10. ANALYSE SPORTIVE INDEPENDANTE M3
+# ============================================================
+
+def analyser_course(course: Any) -> dict:
+    """
+    Analyse M3 sans modifier la course d'origine.
+
+    Le noyau calcule les scores documentés.
+    M3 examine ensuite les cotes valides.
+    """
+
+    verifier_noyau()
+
+    # Copie de protection des données d'entrée.
+    course_locale = copy.deepcopy(course)
+
+    resultat_brut = noyau_commun.analyser_course(
+        course=course_locale,
+        moteur=MOTEUR,
+        poids=POIDS.copy(),
+        champ=CHAMP,
+        couverture_min=COUVERTURE_MIN,
+    )
+
+    verifier_resultat(resultat_brut)
+
+    # Ne jamais modifier le résultat original du noyau.
+    resultat = copy.deepcopy(resultat_brut)
 
     resultat["outsiders_potentiels"] = []
     resultat["favoris_a_examiner"] = []
+
+    if resultat["statut"] == "NON_ANALYSABLE":
+        return resultat
+
+    chevaux = construire_partants(course_locale)
 
     numeros_analyses = set()
 
     for analyse in resultat["chevaux_analyses"]:
 
-        numero = analyse.get("numero")
+        numero = analyse["numero"]
 
         if numero not in chevaux:
             raise RuntimeError(
-                "Cheval analyse absent "
-                "des partants actifs"
+                "Cheval analysé absent des partants actifs"
             )
 
         if numero in numeros_analyses:
             raise RuntimeError(
-                "Cheval analyse plusieurs fois"
+                "Cheval analysé plusieurs fois"
             )
 
         numeros_analyses.add(numero)
 
         cheval = chevaux[numero]
 
+        nom = analyse.get("nom")
+
         if (
-            not isinstance(analyse.get("nom"), str)
-            or not analyse["nom"].strip()
+            not isinstance(nom, str)
+            or nom != cheval["nom"]
         ):
             raise RuntimeError(
-                "Nom analyse invalide"
-            )
-
-        if analyse["nom"] != cheval.get("nom"):
-            raise RuntimeError(
-                "Nom du cheval incoherent"
+                "Nom du cheval incohérent"
             )
 
         cote, source, collecte_a = verifier_cote(
             cheval,
-            course.get("depart"),
+            course_locale.get("depart"),
         )
 
         analyse["cote"] = cote
         analyse["cote_source"] = source
         analyse["cote_collectee_a"] = collecte_a
-
         analyse["score_m3"] = analyse["score"]
 
         if (
@@ -557,8 +624,7 @@ def analyser_course(
             and cheval.get("cote") is not None
         ):
             analyse["cote_ignoree"] = (
-                "Cote invalide ou provenance "
-                "insuffisante"
+                "Cote invalide ou provenance insuffisante"
             )
 
         score = analyse["score"]
@@ -566,9 +632,9 @@ def analyser_course(
         if score is None or cote is None:
             continue
 
-        # ----------------------------------------
+        # --------------------------------------------
         # OUTSIDERS POTENTIELS
-        # ----------------------------------------
+        # --------------------------------------------
 
         if (
             cote >= SEUIL_COTE_OUTSIDER
@@ -577,20 +643,19 @@ def analyser_course(
 
             resultat["outsiders_potentiels"].append({
                 "numero": numero,
-                "nom": analyse["nom"],
+                "nom": nom,
                 "cote": cote,
                 "cote_source": source,
                 "cote_collectee_a": collecte_a,
                 "score_m3": score,
                 "motif": (
-                    "Cote elevee et "
-                    "indicateurs favorables"
+                    "Cote élevée et indicateurs favorables"
                 ),
             })
 
-        # ----------------------------------------
-        # FAVORIS VULNERABLES
-        # ----------------------------------------
+        # --------------------------------------------
+        # FAVORIS A EXAMINER
+        # --------------------------------------------
 
         if (
             cote <= SEUIL_COTE_FAVORI
@@ -599,132 +664,190 @@ def analyser_course(
 
             resultat["favoris_a_examiner"].append({
                 "numero": numero,
-                "nom": analyse["nom"],
+                "nom": nom,
                 "cote": cote,
                 "cote_source": source,
                 "cote_collectee_a": collecte_a,
                 "score_m3": score,
                 "motif": (
-                    "Cote basse et "
-                    "indicateurs faibles"
+                    "Cote basse et indicateurs faibles"
                 ),
             })
 
     if numeros_analyses != set(chevaux):
         raise RuntimeError(
-            "Liste des chevaux analyses incomplete"
+            "Liste des chevaux analysés incomplète"
         )
 
     # ========================================================
-    # 9. ENRICHISSEMENT DU CLASSEMENT
+    # 11. ENRICHISSEMENT DU CLASSEMENT
     # ========================================================
 
-    for cle in (
-        "classement",
-        "classement_partiel",
-    ):
+    for champ in ("classement", "classement_partiel"):
 
-        for position in resultat[cle]:
-
-            numero = position.get("numero")
-
-            if numero not in numeros_analyses:
-                raise RuntimeError(
-                    "Classement incoherent "
-                    "avec les analyses"
-                )
-
-            if not verifier_score(
-                position.get("score")
-            ):
-                raise RuntimeError(
-                    "Score de classement invalide"
-                )
-
+        for position in resultat[champ]:
             position["score_m3"] = position["score"]
 
-    # Validation finale apres enrichissement.
+    resultat["outsiders_potentiels"].sort(
+        key=lambda x: (-x["score_m3"], -x["cote"], x["numero"])
+    )
+
+    resultat["favoris_a_examiner"].sort(
+        key=lambda x: (x["score_m3"], x["cote"], x["numero"])
+    )
+
     verifier_resultat(resultat)
 
     return resultat
 
 
 # ============================================================
-# 10. INTERFACE DU COORDINATEUR X1000
+# 12. INTERFACE DU COORDINATEUR X1000
 # ============================================================
 
-def analyser_course_m3(
-    course: Any,
-) -> dict:
-    """Point d'entree explicite du moteur M3."""
-
+def analyser_course_m3(course: Any) -> dict:
+    """Point d'entrée explicite du moteur M3."""
     return analyser_course(course)
 
 
 # ============================================================
-# 11. CLASSE MOTEUR M3
+# 13. CLASSE MOTEUR M3
 # ============================================================
 
 class MoteurM3:
-    """
-    Moteur M3 independant.
-
-    Exemple :
-        moteur = MoteurM3()
-        resultat = moteur.analyser(course)
-    """
+    """Moteur sportif indépendant M3."""
 
     nom = MOTEUR
     version = VERSION
+    champ = CHAMP
 
-    def analyser(
-        self,
-        course: Any,
-    ) -> dict:
+    def analyser(self, course: Any) -> dict:
         return analyser_course(course)
 
+    def verifier(self) -> bool:
+        verifier_noyau()
+        return True
+
 
 # ============================================================
-# 12. EXECUTION SECURISEE
+# 14. AUTOTEST SANS COLLECTE PMU
 # ============================================================
 
-def main() -> int:
+def self_test() -> int:
     """
-    Execution en lecture seule.
+    Vérifie la configuration et les interfaces.
 
-    Commande :
-        python -m moteurs.m3 --input course.json
-
-    Codes de sortie :
-        0 : analyse complete disponible
-        2 : donnees insuffisantes ou course invalide
-        1 : erreur technique
+    Aucun téléchargement.
+    Aucune analyse réelle.
+    Aucun FIGÉ.
+    Aucune publication.
+    Aucune écriture d'archives.
     """
 
     try:
         verifier_noyau()
 
-        return executer(
-            analyser_course
-        )
+        assert MOTEUR == "M3"
+        assert VERSION == "2.4"
+        assert len(POIDS) == 5
+        assert COUVERTURE_MIN == 0.65
 
-    except (
-        RuntimeError,
-        ValueError,
-        TypeError,
-        OverflowError,
-    ) as erreur:
+        assert verifier_score(0)
+        assert verifier_score(100)
+        assert not verifier_score(-1)
+        assert not verifier_score(101)
+        assert not verifier_score(float("nan"))
 
+        assert lire_date(
+            "2026-11-04T10:00:00+01:00"
+        ) is not None
+
+        assert lire_date(
+            "2026-11-04T10:00:00"
+        ) is None
+
+        assert callable(analyser_course)
+        assert callable(analyser_course_m3)
+
+        moteur = MoteurM3()
+
+        assert moteur.nom == MOTEUR
+        assert moteur.verifier() is True
+
+        print("X1000 V2.4 — M3")
+        print("AUTOTEST : OK")
+        print("Moteur : M3")
+        print("Spécialité : outsiders et favoris vulnérables")
+        print("Critères indépendants : 5")
+        print("Pondérations : 100 %")
+        print("Couverture minimale : 65 %")
+        print("Collecte PMU : aucune")
+        print("Publication : aucune")
+        print("FIGÉ automatique : aucun")
+        print("Modification archives : aucune")
+        print("Statut : CONFIGURATION VALIDÉE")
+
+        return 0
+
+    except Exception as erreur:
         print(
-            f"Erreur M3 : {erreur}",
+            f"AUTOTEST M3 : ECHEC — "
+            f"{type(erreur).__name__}: {erreur}",
             file=sys.stderr,
         )
-
         return 1
 
 
 # ============================================================
-# 13. DEMARRAGE
+# 15. EXECUTION SECURISEE
+# ============================================================
+
+def main() -> int:
+    """
+    Commandes :
+        python -m moteurs.m3 --self-test
+        python -m moteurs.m3 --input course.json
+
+    Le noyau commun gère l'interface d'analyse.
+    """
+
+    parser = argparse.ArgumentParser(
+        description="X1000 V2.4 — M3",
+        add_help=False,
+    )
+
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+    )
+
+    args, _ = parser.parse_known_args()
+
+    if args.self_test:
+        return self_test()
+
+    try:
+        verifier_noyau()
+
+        code = noyau_commun.executer(analyser_course)
+
+        if type(code) is not int:
+            raise RuntimeError(
+                "Code de sortie du noyau invalide"
+            )
+
+        return code
+
+    except Exception as erreur:
+        print(
+            f"ERREUR M3 : {type(erreur).__name__}: {erreur}",
+            file=sys.stderr,
+        )
+        return 1
+
+
+# ============================================================
+# 16. POINT D'ENTREE
 # ============================================================
 
 if __name__ == "__main__":
