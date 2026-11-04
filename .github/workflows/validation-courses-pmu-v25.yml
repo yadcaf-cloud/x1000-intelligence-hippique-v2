@@ -5,10 +5,12 @@ on:
   push:
     branches:
       - feature/installation-x1000-v2
+      - fix/x1000-v2-reparation-controlee
     paths:
-      - validation_courses_pmu_v25.py
-      - courses.json
-      - .github/workflows/validation-courses-pmu-v25.yml
+      - "validation_courses_pmu_v25.py"
+      - "courses.json"
+      - "data/courses.json"
+      - ".github/workflows/validation-courses-pmu-v25.yml"
 
 permissions:
   contents: read
@@ -20,7 +22,13 @@ concurrency:
 jobs:
   validation:
     name: Validation France sans publication
-    if: github.ref == 'refs/heads/feature/installation-x1000-v2'
+
+    if: >-
+      ${{
+        github.ref == 'refs/heads/feature/installation-x1000-v2' ||
+        github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee'
+      }}
+
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
@@ -29,8 +37,14 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
       PYTHONNOUSERSITE: "1"
+      PYTHONPATH: "."
 
     steps:
+
+      # ======================================================
+      # 1. RECUPERATION SECURISEE
+      # ======================================================
+
       - name: Recuperer branche securisee
         uses: actions/checkout@v4
         with:
@@ -41,13 +55,45 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Verifier branche et syntaxe
+      # ======================================================
+      # 2. CONTROLE DE LA BRANCHE
+      # ======================================================
+
+      - name: Verifier branche autorisee
         shell: bash
         run: |
           set -euo pipefail
 
-          test "$GITHUB_REF" = \
-            "refs/heads/feature/installation-x1000-v2"
+          case "$GITHUB_REF" in
+            refs/heads/feature/installation-x1000-v2)
+              echo "Branche installation autorisee"
+              ;;
+
+            refs/heads/fix/x1000-v2-reparation-controlee)
+              echo "Branche reparation autorisee"
+              ;;
+
+            *)
+              echo "::error::Branche non autorisee"
+              exit 1
+              ;;
+          esac
+
+          echo "Reference : $GITHUB_REF"
+          echo "Commit : $GITHUB_SHA"
+
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          echo "Branche securisee : OK"
+
+      # ======================================================
+      # 3. VERIFICATION DU SCRIPT PYTHON
+      # ======================================================
+
+      - name: Verifier syntaxe Python
+        shell: bash
+        run: |
+          set -euo pipefail
 
           python - <<'PY'
           import ast
@@ -61,6 +107,11 @@ jobs:
                   "ERREUR : script de validation absent"
               )
 
+          if path.stat().st_size == 0:
+              raise SystemExit(
+                  "ERREUR : script de validation vide"
+              )
+
           ast.parse(
               path.read_text(encoding="utf-8-sig"),
               filename=name
@@ -69,12 +120,23 @@ jobs:
           print("Syntaxe Python : OK")
           PY
 
+      # ======================================================
+      # 4. AUTOTESTS V2.5
+      # ======================================================
+
       - name: Executer autotests V2.5
         shell: bash
         run: |
           set -euo pipefail
+
           python validation_courses_pmu_v25.py \
             --self-test
+
+          echo "Autotests V2.5 : OK"
+
+      # ======================================================
+      # 5. LOCALISATION DES DONNEES
+      # ======================================================
 
       - name: Verifier disponibilite des donnees
         id: donnees
@@ -84,22 +146,106 @@ jobs:
 
           if [ -f courses.json ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "Fichier courses.json present"
+            echo "path=courses.json" >> "$GITHUB_OUTPUT"
+            echo "Donnees trouvees : courses.json"
+
+          elif [ -f data/courses.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "path=data/courses.json" >> "$GITHUB_OUTPUT"
+            echo "Donnees trouvees : data/courses.json"
+
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "path=" >> "$GITHUB_OUTPUT"
+
             echo "::notice::AUCUNE DONNEE : courses.json absent"
             echo "Aucune course inventee"
           fi
 
+      # ======================================================
+      # 6. VERIFICATION DU JSON SOURCE
+      # ======================================================
+
+      - name: Verifier integrite des donnees source
+        if: steps.donnees.outputs.present == 'true'
+        shell: bash
+        env:
+          COURSES_INPUT: ${{ steps.donnees.outputs.path }}
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["COURSES_INPUT"])
+
+          if not path.is_file():
+              raise SystemExit(
+                  "ERREUR : fichier source absent"
+              )
+
+          if not 0 < path.stat().st_size <= 5000000:
+              raise SystemExit(
+                  "ERREUR : taille source invalide"
+              )
+
+          def unique_pairs(pairs):
+              result = {}
+
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError(
+                          f"Cle JSON dupliquee : {key}"
+                      )
+
+                  result[key] = value
+
+              return result
+
+          def invalid_constant(value):
+              raise ValueError(
+                  f"Constante JSON interdite : {value}"
+              )
+
+          data = json.loads(
+              path.read_text(encoding="utf-8-sig"),
+              object_pairs_hook=unique_pairs,
+              parse_constant=invalid_constant
+          )
+
+          if not isinstance(data, (list, dict)):
+              raise SystemExit(
+                  "ERREUR : structure JSON incorrecte"
+              )
+
+          print("JSON source : conforme")
+          print("Fichier :", path)
+          print("Aucune modification effectuee")
+          PY
+
+      # ======================================================
+      # 7. VALIDATION LOCALE DES COURSES
+      # ======================================================
+
       - name: Executer validation des courses
         if: steps.donnees.outputs.present == 'true'
         shell: bash
+        env:
+          COURSES_INPUT: ${{ steps.donnees.outputs.path }}
         run: |
           set -euo pipefail
 
           python validation_courses_pmu_v25.py \
-            --input courses.json \
+            --input "$COURSES_INPUT" \
             --output "$RUNNER_TEMP/validation-v25.json"
+
+          echo "Rapport local genere hors depot"
+
+      # ======================================================
+      # 8. CONTROLE STRICT DU RAPPORT
+      # ======================================================
 
       - name: Controler rapport V2.5
         if: steps.donnees.outputs.present == 'true'
@@ -118,12 +264,15 @@ jobs:
 
           def unique_pairs(pairs):
               result = {}
+
               for key, value in pairs:
                   require(
                       key not in result,
                       f"Cle JSON dupliquee : {key}"
                   )
+
                   result[key] = value
+
               return result
 
           def invalid_constant(value):
@@ -189,8 +338,7 @@ jobs:
               ("invalides", invalid)
           ):
               require(
-                  type(value) is int
-                  and value >= 0,
+                  type(value) is int and value >= 0,
                   f"Compteur invalide : {key}"
               )
 
@@ -229,10 +377,12 @@ jobs:
                   isinstance(item, dict),
                   "Resultat non objet"
               )
+
               require(
                   item.get("valide") is True,
                   "Course invalide"
               )
+
               require(
                   item.get("erreurs") == [],
                   "Erreurs de validation presentes"
@@ -244,6 +394,10 @@ jobs:
           print("Validation officielle : NON")
           print("Publication : NON")
           PY
+
+      # ======================================================
+      # 9. PROTECTION DES FICHIERS HISTORIQUES
+      # ======================================================
 
       - name: Verifier absence de modifications
         if: always()
@@ -257,7 +411,17 @@ jobs:
             exit 1
           fi
 
-          echo "Fichiers suivis inchanges"
+          if [ -n "$(git ls-files --others --exclude-standard)" ]; then
+            echo "::error::Fichiers non suivis crees"
+            exit 1
+          fi
+
+          echo "Depot inchange : OK"
+          echo "Archives et FIGES : aucune modification detectee"
+
+      # ======================================================
+      # 10. BILAN GITHUB
+      # ======================================================
 
       - name: Bilan GitHub
         if: success()
@@ -268,24 +432,30 @@ jobs:
           set -euo pipefail
 
           {
-            echo "## X1000 V2.5"
+            echo "## X1000 V2.5 - Validation PMU France"
             echo ""
-            echo "- Autotests Python : reussis"
             echo "- Branche securisee : OK"
+            echo "- Syntaxe Python : OK"
+            echo "- Autotests Python : reussis"
+            echo "- Depot : inchange"
             echo "- Publication : aucune"
             echo "- FIGE : aucun par le workflow"
             echo "- Transmission M1-M5 : aucune"
             echo "- Archives : non modifiees"
+            echo "- Commit automatique : aucun"
             echo ""
+
             if [ "$DONNEES_PRESENTES" = "true" ]; then
-              echo "Validation structurelle : conforme"
-              echo "Donnees fournies : oui"
+              echo "- Validation structurelle : conforme"
+              echo "- Donnees fournies : oui"
             else
-              echo "Statut : AUCUNE DONNEE"
-              echo "courses.json absent"
-              echo "Aucune course validee"
+              echo "- Statut : AUCUNE DONNEE"
+              echo "- courses.json absent"
+              echo "- Aucune course validee"
             fi
+
             echo ""
-            echo "Aucune validation officielle."
-            echo "Aucune collecte automatique."
+            echo "Validation officielle : NON"
+            echo "Collecte automatique : NON"
+            echo "Publication automatique : NON"
           } >> "$GITHUB_STEP_SUMMARY"
