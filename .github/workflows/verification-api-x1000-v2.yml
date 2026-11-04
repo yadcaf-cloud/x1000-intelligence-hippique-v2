@@ -30,7 +30,6 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
       PYTHONNOUSERSITE: "1"
-      X1000_DATA_DIR: ${{ runner.temp }}/x1000-data
 
     steps:
       - name: Recuperer le depot
@@ -43,6 +42,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Configurer les donnees temporaires
+        run: |
+          echo "X1000_DATA_DIR=${RUNNER_TEMP}/x1000-data" >> "$GITHUB_ENV"
+          mkdir -p "${RUNNER_TEMP}/x1000-data"
+
       - name: Verifier les fichiers
         run: |
           test -f api.py
@@ -50,18 +54,18 @@ jobs:
 
       - name: Installer les dependances
         run: |
-          python -m pip install \
-            -r requirements.txt
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install "httpx>=0.27,<1.0"
+          python -m pip check
 
-      - name: Verifier la syntaxe
+      - name: Verifier la syntaxe Python
         run: |
           python - <<'PY'
           import ast
           from pathlib import Path
 
-          source = Path("api.py").read_text(
-              encoding="utf-8"
-          )
+          source = Path("api.py").read_text(encoding="utf-8")
           ast.parse(source)
           print("Syntaxe Python valide")
           PY
@@ -72,8 +76,6 @@ jobs:
           from fastapi.testclient import TestClient
           from api import app
 
-          client = TestClient(app)
-
           endpoints = [
               "/api/status",
               "/api/courses",
@@ -83,59 +85,49 @@ jobs:
               "/api/diagnostic",
           ]
 
-          for endpoint in endpoints:
-              response = client.get(endpoint)
-              assert response.status_code == 200, (
-                  endpoint, response.status_code
-              )
-              assert isinstance(
-                  response.json(), dict
-              )
-              print("OK", endpoint)
+          with TestClient(app) as client:
+              for endpoint in endpoints:
+                  response = client.get(endpoint)
+                  assert response.status_code == 200, (
+                      endpoint, response.status_code
+                  )
+                  assert isinstance(response.json(), dict)
+                  print("OK", endpoint)
 
-          status = client.get(
-              "/api/status"
-          ).json()
+              status = client.get("/api/status").json()
 
-          assert set(status["moteurs"]) == {
-              "M1", "M2", "M3", "M4", "M5"
-          }
-
-          assert status[
-              "collecte_automatique"
-          ] is False
-
-          assert status[
-              "figes_automatiques"
-          ] is False
-
-          for method in ("POST", "PUT", "PATCH", "DELETE"):
-              response = client.request(
-                  method, "/api/courses"
-              )
-              assert response.status_code == 405
-
-          allowed = client.get(
-              "/api/status",
-              headers={
-                  "Origin":
-                  "https://yadcaf-cloud.github.io"
+              assert set(status["moteurs"]) == {
+                  "M1", "M2", "M3", "M4", "M5"
               }
-          )
-          assert allowed.headers.get(
-              "access-control-allow-origin"
-          ) == "https://yadcaf-cloud.github.io"
 
-          denied = client.get(
-              "/api/status",
-              headers={
-                  "Origin":
-                  "https://example.com"
-              }
-          )
-          assert denied.headers.get(
-              "access-control-allow-origin"
-          ) is None
+              assert status["collecte_automatique"] is False
+              assert status["figes_automatiques"] is False
+              assert status["publication_automatique"] is False
+              assert status["validation_officielle_automatique"] is False
 
-          print("Verification terminee")
+              for method in ("POST", "PUT", "PATCH", "DELETE"):
+                  response = client.request(
+                      method, "/api/courses"
+                  )
+                  assert response.status_code == 405
+
+              allowed = client.get(
+                  "/api/status",
+                  headers={
+                      "Origin": "https://yadcaf-cloud.github.io"
+                  },
+              )
+              assert allowed.headers.get(
+                  "access-control-allow-origin"
+              ) == "https://yadcaf-cloud.github.io"
+
+              denied = client.get(
+                  "/api/status",
+                  headers={"Origin": "https://example.com"},
+              )
+              assert denied.headers.get(
+                  "access-control-allow-origin"
+              ) is None
+
+          print("Verification X1000 V2 terminee")
           PY
