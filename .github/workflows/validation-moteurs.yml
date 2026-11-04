@@ -28,11 +28,13 @@ concurrency:
 jobs:
   validation:
     name: Controle M1-M5 sans publication
+
     if: >-
       ${{
         github.ref == 'refs/heads/feature/installation-x1000-v2' ||
         github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee'
       }}
+
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
@@ -44,6 +46,11 @@ jobs:
       PYTHONPATH: "."
 
     steps:
+
+      # ======================================================
+      # 1. RECUPERATION SECURISEE
+      # ======================================================
+
       - name: Recuperer branche securisee
         uses: actions/checkout@v4
         with:
@@ -54,6 +61,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      # ======================================================
+      # 2. VERIFICATION DE LA BRANCHE
+      # ======================================================
+
       - name: Verifier branche
         shell: bash
         run: |
@@ -61,7 +72,7 @@ jobs:
 
           case "$GITHUB_REF" in
             refs/heads/feature/installation-x1000-v2|refs/heads/fix/x1000-v2-reparation-controlee)
-              echo "Reference autorisee : $GITHUB_REF"
+              echo "Branche autorisee : $GITHUB_REF"
               ;;
             *)
               echo "::error::Branche non autorisee"
@@ -74,6 +85,10 @@ jobs:
           test "$(git branch --show-current)" = "$BRANCH"
 
           echo "Branche securisee : OK"
+
+      # ======================================================
+      # 3. SYNTAXE DE TOUS LES FICHIERS PYTHON
+      # ======================================================
 
       - name: Verifier syntaxe Python
         shell: bash
@@ -90,15 +105,15 @@ jobs:
               "venv",
               "__pycache__",
               "node_modules",
-              "site-packages"
+              "site-packages",
           }
 
           files = sorted(
-              p for p in Path(".").rglob("*.py")
+              path
+              for path in Path(".").rglob("*.py")
               if not any(
-                  part in excluded
-                  or part.startswith(".")
-                  for part in p.parts
+                  part in excluded or part.startswith(".")
+                  for part in path.parts
               )
           )
 
@@ -110,14 +125,18 @@ jobs:
           for path in files:
               ast.parse(
                   path.read_text(encoding="utf-8-sig"),
-                  filename=str(path)
+                  filename=str(path),
               )
               print("SYNTAXE OK :", path)
 
           print("Fichiers controles :", len(files))
           PY
 
-      - name: Verifier cinq moteurs independants
+      # ======================================================
+      # 4. PRESENCE DES CINQ MOTEURS V2.4
+      # ======================================================
+
+      - name: Verifier cinq moteurs V2.4
         shell: bash
         run: |
           set -euo pipefail
@@ -125,58 +144,49 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          root = Path(".")
           folder = Path("moteurs")
-          found = []
 
-          for number in range(1, 6):
-              names = (
-                  f"m{number}.py",
-                  f"M{number}.py"
-              )
+          required = [
+              folder / f"m{numero}.py"
+              for numero in range(1, 6)
+          ]
 
-              candidates = [
-                  base / name
-                  for base in (folder, root)
-                  for name in names
-                  if (base / name).is_file()
-              ]
+          required.append(
+              folder / "noyau_commun.py"
+          )
 
-              if not candidates:
+          for path in required:
+              if not path.is_file():
                   raise SystemExit(
-                      f"ERREUR : moteur M{number} absent"
+                      f"ERREUR : fichier absent {path}"
                   )
 
-              for path in candidates:
-                  if path.stat().st_size == 0:
-                      raise SystemExit(
-                          f"ERREUR : moteur vide {path}"
+              if path.stat().st_size == 0:
+                  raise SystemExit(
+                      f"ERREUR : fichier vide {path}"
+                  )
+
+              print("PRESENT :", path)
+
+          for numero in range(1, 6):
+              for name in (
+                  f"m{numero}.py",
+                  f"M{numero}.py",
+              ):
+                  legacy = Path(name)
+
+                  if legacy.is_file():
+                      print(
+                          "AVERTISSEMENT : ancien moteur "
+                          f"present a la racine : {legacy}"
                       )
 
-              chosen = candidates[0]
-              found.append(chosen)
-
-              print(
-                  f"M{number} : PRESENT - {chosen}"
-              )
-
-              if len(candidates) > 1:
-                  print(
-                      f"AVERTISSEMENT M{number} : "
-                      "plusieurs fichiers detectes"
-                  )
-
-          if len(found) != 5:
-              raise SystemExit(
-                  "ERREUR : cinq moteurs requis"
-              )
-
-          print("M1-M5 : PRESENCE CONFIRMEE")
-          print(
-              "Independance fonctionnelle "
-              "non prouvee par ce controle"
-          )
+          print("Cinq moteurs V2.4 : PRESENTS")
           PY
+
+      # ======================================================
+      # 5. COMPOSANTS CENTRAUX
+      # ======================================================
 
       - name: Verifier composants centraux
         shell: bash
@@ -190,7 +200,7 @@ jobs:
               "api.py",
               "validation_moteurs.py",
               "coordination_x1000.py",
-              "config_x1000.py"
+              "config_x1000.py",
           )
 
           for name in required:
@@ -207,7 +217,13 @@ jobs:
                   )
 
               print("COMPOSANT OK :", name)
+
+          print("Composants centraux : OK")
           PY
+
+      # ======================================================
+      # 6. CHARGEMENT UNIFORME M1 A M5
+      # ======================================================
 
       - name: Tester chargement API M1-M5
         shell: bash
@@ -215,51 +231,169 @@ jobs:
           set -euo pipefail
 
           python - <<'PY'
-          import api
           import importlib
+          from pathlib import Path
 
-          names = ("M1", "M2", "M3", "M4", "M5")
+          import api
+          from moteurs import noyau_commun
 
-          for name in names:
+          if str(noyau_commun.VERSION) != "2.4":
+              raise SystemExit(
+                  "ERREUR : noyau commun incompatible"
+              )
+
+          required_functions = (
+              "analyser_course",
+              "verifier_course",
+              "verifier_sortie_analyse",
+              "executer",
+          )
+
+          for fonction in required_functions:
+              if not callable(
+                  getattr(noyau_commun, fonction, None)
+              ):
+                  raise SystemExit(
+                      f"ERREUR : fonction absente {fonction}"
+                  )
+
+          for numero in range(1, 6):
+              name = f"M{numero}"
+              module_name = f"moteurs.m{numero}"
+
               if not api.engine_available(name):
                   raise SystemExit(
                       f"ERREUR : {name} absent dans API"
                   )
 
-              if name == "M1":
-                  module = importlib.import_module(
-                      "moteurs.m1"
-                  )
-              else:
-                  path = api.engine_path(name)
-                  import importlib.util
+              expected = (
+                  Path("moteurs") / f"m{numero}.py"
+              ).resolve()
 
-                  spec = importlib.util.spec_from_file_location(
-                      "test_" + name.lower(),
-                      path
+              actual = api.engine_path(name)
+
+              if actual is None or actual.resolve() != expected:
+                  raise SystemExit(
+                      f"ERREUR : chemin API incorrect {name}"
                   )
 
-                  if spec is None or spec.loader is None:
-                      raise SystemExit(
-                          f"ERREUR : chargement {name}"
-                      )
+              module = importlib.import_module(
+                  module_name
+              )
 
-                  module = importlib.util.module_from_spec(
-                      spec
+              if Path(module.__file__).resolve() != expected:
+                  raise SystemExit(
+                      f"ERREUR : mauvais module {name}"
                   )
-                  spec.loader.exec_module(module)
+
+              if getattr(module, "MOTEUR", None) != name:
+                  raise SystemExit(
+                      f"ERREUR : identite incorrecte {name}"
+                  )
+
+              if str(getattr(module, "VERSION", "")) != "2.4":
+                  raise SystemExit(
+                      f"ERREUR : version incorrecte {name}"
+                  )
 
               if not callable(
                   getattr(module, "analyser_course", None)
               ):
                   raise SystemExit(
-                      f"ERREUR : analyser_course {name}"
+                      f"ERREUR : analyser_course absent {name}"
                   )
 
               print(f"IMPORT {name} : OK")
 
-          print("Chargement API M1-M5 : OK")
+          print("Chargement M1-M5 : OK")
           PY
+
+      # ======================================================
+      # 7. CONTROLE DES DONNEES INSUFFISANTES
+      # ======================================================
+
+      - name: Tester absence de predictions inventees
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import importlib
+          from datetime import datetime, timedelta, timezone
+
+          from moteurs import noyau_commun
+
+          depart = (
+              datetime.now(timezone.utc)
+              + timedelta(days=1)
+          ).isoformat()
+
+          course = {
+              "id": "TEST-MOTEURS-SANS-DONNEES",
+              "localisation_france_verifiee": True,
+              "depart_verifie": True,
+              "depart": depart,
+              "nombre_partants": 5,
+              "non_partants": [],
+              "partants": [
+                  {
+                      "numero": numero,
+                      "nom": f"Cheval test {numero}",
+                      "non_partant": False,
+                  }
+                  for numero in range(1, 6)
+              ],
+          }
+
+          for numero in range(1, 6):
+              name = f"M{numero}"
+
+              module = importlib.import_module(
+                  f"moteurs.m{numero}"
+              )
+
+              resultat = module.analyser_course(course)
+
+              noyau_commun.verifier_sortie_analyse(
+                  course,
+                  resultat,
+              )
+
+              if resultat.get("statut") != "DONNEES_INSUFFISANTES":
+                  raise SystemExit(
+                      f"ERREUR : statut incorrect {name}"
+                  )
+
+              if resultat.get("classement"):
+                  raise SystemExit(
+                      f"ERREUR : classement invente {name}"
+                  )
+
+              if resultat.get("classement_partiel"):
+                  raise SystemExit(
+                      f"ERREUR : classement partiel invente {name}"
+                  )
+
+              if resultat.get("fige") is not False:
+                  raise SystemExit(
+                      f"ERREUR : FIGE non autorise {name}"
+                  )
+
+              if resultat.get("publication") is not False:
+                  raise SystemExit(
+                      f"ERREUR : publication non autorisee {name}"
+                  )
+
+              print(
+                  f"{name} : aucune prediction inventee"
+              )
+
+          print("Controle donnees insuffisantes : OK")
+          PY
+
+      # ======================================================
+      # 8. TESTS PYTHON EXISTANTS
+      # ======================================================
 
       - name: Executer tests Python
         shell: bash
@@ -274,9 +408,7 @@ jobs:
           loader = unittest.TestLoader()
           suite = unittest.TestSuite()
 
-          for path in sorted(
-              Path(".").glob("test_*.py")
-          ):
+          for path in sorted(Path(".").glob("test_*.py")):
               suite.addTests(
                   loader.loadTestsFromName(path.stem)
               )
@@ -288,7 +420,7 @@ jobs:
                   loader.discover(
                       start_dir=str(folder),
                       pattern="test_*.py",
-                      top_level_dir=str(folder)
+                      top_level_dir=str(folder),
                   )
               )
 
@@ -296,7 +428,7 @@ jobs:
 
           if count == 0:
               raise SystemExit(
-                  "ERREUR : aucun test decouvert"
+                  "ERREUR : aucun test Python decouvert"
               )
 
           print("Tests decouverts :", count)
@@ -310,6 +442,10 @@ jobs:
 
           print("Tests Python : REUSSIS")
           PY
+
+      # ======================================================
+      # 9. VERIFICATION DE L'API EN LECTURE SEULE
+      # ======================================================
 
       - name: Verifier API lecture seule
         shell: bash
@@ -325,7 +461,7 @@ jobs:
               "/api/selections",
               "/api/figes",
               "/api/audits",
-              "/api/diagnostic"
+              "/api/diagnostic",
           )
 
           for route in required:
@@ -338,15 +474,22 @@ jobs:
               "do_POST",
               "do_PUT",
               "do_PATCH",
-              "do_DELETE"
+              "do_DELETE",
           ):
-              if not hasattr(api.Handler, method):
+              if not callable(
+                  getattr(api.Handler, method, None)
+              ):
                   raise SystemExit(
                       f"ERREUR : protection absente {method}"
                   )
 
-          print("API lecture seule : controles OK")
+          print("Routes API : OK")
+          print("Methodes d'ecriture bloquees : OK")
           PY
+
+      # ======================================================
+      # 10. VERIFICATION DU DEPOT INCHANGE
+      # ======================================================
 
       - name: Verifier depot inchange
         if: always()
@@ -369,6 +512,10 @@ jobs:
 
           echo "Depot inchange : OK"
 
+      # ======================================================
+      # 11. BILAN FINAL
+      # ======================================================
+
       - name: Bilan de validation
         if: success()
         shell: bash
@@ -380,16 +527,19 @@ jobs:
             echo ""
             echo "- Branche securisee : OK"
             echo "- Syntaxe Python : OK"
-            echo "- Cinq moteurs : presents"
+            echo "- Moteurs V2.4 : presents"
+            echo "- Noyau commun : compatible"
             echo "- Chargement API M1-M5 : OK"
             echo "- Composants centraux : presents"
+            echo "- Absence de predictions inventees : OK"
             echo "- Tests Python : reussis"
             echo "- Routes API : controlees"
             echo "- Depot : inchange"
-            echo "- Publication : aucune"
-            echo "- FIGE : aucun par le workflow"
+            echo "- Publication automatique : aucune"
+            echo "- FIGE automatique : aucun"
             echo "- Commit automatique : aucun"
             echo ""
             echo "Aucune prediction publiee."
-            echo "Execution sportive complete non certifiee."
+            echo "Validation technique uniquement."
+            echo "Fiabilite sportive non garantie."
           } >> "$GITHUB_STEP_SUMMARY"
