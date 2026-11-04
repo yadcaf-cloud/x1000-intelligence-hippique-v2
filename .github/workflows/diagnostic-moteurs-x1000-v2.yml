@@ -1,0 +1,42 @@
+name: X1000 V2 - Diagnostic moteurs M1 a M5
+
+on:
+  workflow_dispatch:
+
+  push:
+    paths:
+      - "m1.py"
+      - "m2.py"
+      - "m3.py"
+      - "m4.py"
+      - "m5.py"
+      - "m1.py "
+      - "m2.py "
+      - "m3.py "
+      - "noyau_commun.py"
+      - "verification_moteurs.py"
+      - ".github/workflows/diagnostic-moteurs-x1000-v2.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    name: Controle statique M1-M5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Executer le diagnostic
+        run: |
+          python verification_moteurs.py
