@@ -2,17 +2,15 @@ name: X1000 V2.5 - Validation courses PMU France
 
 on:
   workflow_dispatch:
-
   push:
     branches:
       - feature/installation-x1000-v2
       - fix/x1000-v2-reparation-controlee
-
     paths:
-      - "validation_courses_pmu_v25.py"
-      - "courses.json"
-      - "data/courses.json"
-      - ".github/workflows/validation-courses-pmu-v25.yml"
+      - 'validation_courses_pmu_v25.py'
+      - 'courses.json'
+      - 'data/courses.json'
+      - '.github/workflows/validation-courses-pmu-v25.yml'
 
 permissions:
   contents: read
@@ -23,551 +21,633 @@ concurrency:
 
 jobs:
   validation:
-    name: Validation France sans publication
-
+    name: Validation locale sans publication
     if: >-
-      ${{
-        github.ref == 'refs/heads/feature/installation-x1000-v2' ||
-        github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee'
-      }}
-
+      ${{ github.ref == 'refs/heads/feature/installation-x1000-v2' ||
+          github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     env:
       TZ: Europe/Paris
-      PYTHONDONTWRITEBYTECODE: "1"
-      PYTHONUNBUFFERED: "1"
-      PYTHONNOUSERSITE: "1"
-      PYTHONPATH: "."
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONNOUSERSITE: '1'
+      PYTHONUNBUFFERED: '1'
+      PYTHONPATH: '.'
 
     defaults:
       run:
         shell: bash
 
     steps:
-
-      # ====================================================
-      # 1. RECUPERATION SECURISEE
-      # ====================================================
-
-      - name: Recuperer branche securisee
+      - name: Recuperer le depot sans identifiants persistants
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Installer Python
+      - name: Installer Python 3.12
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
-      # ====================================================
-      # 2. VERIFICATION DE LA BRANCHE
-      # ====================================================
-
-      - name: Verifier branche autorisee
+      - name: Verifier reference et commit
         run: |
           set -euo pipefail
-
           case "$GITHUB_REF" in
-            refs/heads/feature/installation-x1000-v2)
-              echo "Branche installation autorisee"
-              ;;
-
-            refs/heads/fix/x1000-v2-reparation-controlee)
-              echo "Branche reparation autorisee"
-              ;;
-
-            *)
-              echo "::error::Branche non autorisee"
-              exit 1
-              ;;
+            refs/heads/feature/installation-x1000-v2|refs/heads/fix/x1000-v2-reparation-controlee) ;;
+            *) echo '::error::Branche non autorisee'; exit 1 ;;
           esac
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          echo 'Reference et commit conformes'
 
-          echo "Reference : $GITHUB_REF"
-          echo "Commit : $GITHUB_SHA"
-
-          ACTUAL_SHA="$(git rev-parse HEAD)"
-
-          if [ "$ACTUAL_SHA" != "$GITHUB_SHA" ]; then
-            echo "::error::Commit incoherent"
-            exit 1
-          fi
-
-          echo "Controle du commit : OK"
-
-      # ====================================================
-      # 3. VERIFICATION DE LA SYNTAXE PYTHON
-      # ====================================================
-
-      - name: Verifier syntaxe Python
+      - name: Capturer integrite initiale du depot
         run: |
           set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
 
+          root = Path.cwd()
+          protected = (
+              'figes.json',
+              'audits.json',
+              'selections.json',
+              'courses.json',
+              'data/courses.json',
+          )
+          snapshot = {}
+
+          for name in protected:
+              path = root / name
+              if path.is_symlink():
+                  raise SystemExit(
+                      f'Lien symbolique interdit : {name}'
+                  )
+              if path.exists():
+                  if not path.is_file():
+                      raise SystemExit(
+                          f'Fichier non regulier : {name}'
+                      )
+                  snapshot[name] = hashlib.sha256(
+                      path.read_bytes()
+                  ).hexdigest()
+              else:
+                  snapshot[name] = None
+
+          target = (
+              Path(os.environ['RUNNER_TEMP'])
+              / 'x1000-protected-before.json'
+          )
+          target.write_text(
+              json.dumps(snapshot, sort_keys=True),
+              encoding='utf-8'
+          )
+          print('Empreintes initiales capturees')
+          PY
+
+      - name: Verifier syntaxe et interface Python
+        run: |
+          set -euo pipefail
           python - <<'PY'
           import ast
           from pathlib import Path
 
-          name = "validation_courses_pmu_v25.py"
-          path = Path(name)
+          path = Path('validation_courses_pmu_v25.py')
 
-          if not path.is_file():
+          if path.is_symlink() or not path.is_file():
               raise SystemExit(
-                  "ERREUR : script de validation absent"
+                  'Validateur absent ou symbolique'
               )
 
           if not 0 < path.stat().st_size <= 5_000_000:
               raise SystemExit(
-                  "ERREUR : taille du script invalide"
+                  'Taille du validateur invalide'
               )
 
-          source = path.read_text(
-              encoding="utf-8-sig"
+          tree = ast.parse(
+              path.read_text(encoding='utf-8-sig'),
+              filename=str(path)
           )
 
-          ast.parse(
-              source,
-              filename=name
-          )
+          names = {
+              node.name
+              for node in tree.body
+              if isinstance(
+                  node,
+                  (ast.FunctionDef, ast.AsyncFunctionDef)
+              )
+          }
 
-          print("Syntaxe Python : OK")
+          required = {
+              'main',
+              'self_test',
+              'validate_document',
+              'read_document',
+              'write_report',
+          }
+
+          if not required <= names:
+              raise SystemExit(
+                  f'Interfaces manquantes : '
+                  f'{sorted(required - names)}'
+              )
+
+          print('Syntaxe et interfaces conformes')
           PY
 
-      # ====================================================
-      # 4. AUTOTESTS DU VALIDATEUR V2.5
-      # ====================================================
-
-      - name: Executer autotests V2.5
+      - name: Executer autotests du validateur
         run: |
           set -euo pipefail
+          python validation_courses_pmu_v25.py --self-test
 
-          python validation_courses_pmu_v25.py \
-            --self-test
+      - name: Executer tests de regression isoles
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import copy
+          import json
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
 
-          echo "Autotests V2.5 : OK"
+          import validation_courses_pmu_v25 as v
 
-      # ====================================================
-      # 5. LOCALISATION DES DONNEES
-      # ====================================================
+          example = {
+              'id': '2026-11-03-R1-C1',
+              'date': '2026-11-03',
+              'pays': 'France',
+              'hippodrome': 'Hippodrome fictif (test)',
+              'depart': '2026-11-03T14:00:00+01:00',
+              'partants': [
+                  {'numero': 1, 'nom': 'Test A'},
+                  {'numero': 2, 'nom': 'Test B'},
+              ],
+              'formules': ['Simple gagnant'],
+              'source': 'Fixture fictive',
+          }
 
-      - name: Verifier disponibilite des donnees
+          assert (
+              v.validate_document([example])['statut']
+              == 'VALIDE'
+          )
+
+          assert (
+              v.validate_document([])['statut']
+              == 'AUCUNE_DONNEE'
+          )
+
+          for changes in (
+              {'pays': 'Belgique'},
+              {'date': '2026-11-04'},
+              {'depart': '2026-11-03T14:00:00'},
+              {
+                  'partants': [
+                      {'numero': 1, 'nom': 'A'},
+                      {'numero': 1, 'nom': 'B'},
+                  ]
+              },
+              {'formules': ['Formule inconnue']},
+          ):
+              sample = copy.deepcopy(example)
+              sample.update(changes)
+              assert (
+                  v.validate_document([sample])['invalides']
+                  == 1
+              ), changes
+
+          assert (
+              v.validate_document(
+                  [example, example]
+              )['invalides'] == 2
+          )
+
+          with tempfile.TemporaryDirectory() as temp:
+              directory = Path(temp)
+              source = directory / 'input.json'
+              report = directory / 'report.json'
+
+              source.write_text(
+                  json.dumps([example]),
+                  encoding='utf-8'
+              )
+
+              command = [
+                  sys.executable,
+                  'validation_courses_pmu_v25.py',
+                  '--input',
+                  str(source),
+                  '--output',
+                  str(report),
+              ]
+
+              first = subprocess.run(
+                  command,
+                  capture_output=True,
+                  text=True
+              )
+
+              assert first.returncode == 0, first.stderr
+              assert report.is_file()
+
+              assert (
+                  json.loads(
+                      report.read_text(encoding='utf-8')
+                  )['valides'] == 1
+              )
+
+              second = subprocess.run(
+                  command,
+                  capture_output=True,
+                  text=True
+              )
+
+              assert second.returncode != 0, (
+                  'Ecrasement du rapport accepte'
+              )
+
+              source.write_text(
+                  '{"courses":[],"courses":[]}',
+                  encoding='utf-8'
+              )
+
+              third = subprocess.run(
+                  [
+                      sys.executable,
+                      'validation_courses_pmu_v25.py',
+                      '--input',
+                      str(source),
+                      '--output',
+                      str(directory / 'bad.json'),
+                  ],
+                  capture_output=True,
+                  text=True
+              )
+
+              assert third.returncode != 0, (
+                  'Cles JSON dupliquees acceptees'
+              )
+
+              assert not (
+                  directory / 'bad.json'
+              ).exists()
+
+              missing = subprocess.run(
+                  [
+                      sys.executable,
+                      'validation_courses_pmu_v25.py',
+                      '--input',
+                      str(directory / 'absent.json'),
+                      '--output',
+                      str(directory / 'missing-report.json'),
+                  ],
+                  capture_output=True,
+                  text=True
+              )
+
+              assert missing.returncode != 0, (
+                  'Fichier absent accepte sans option'
+              )
+
+          print('Tests de regression : OK')
+          PY
+
+      - name: Localiser source unique
         id: donnees
         run: |
           set -euo pipefail
-
-          ROOT_FILE="courses.json"
-          DATA_FILE="data/courses.json"
-
-          if [ -f "$ROOT_FILE" ] &&
-             [ -f "$DATA_FILE" ]; then
-
-            echo "::error::Deux sources de courses presentes"
-            echo "::error::Conserver une seule source"
-            exit 1
-          fi
-
-          if [ -f "$ROOT_FILE" ]; then
-
-            echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "path=$ROOT_FILE" >> "$GITHUB_OUTPUT"
-
-            echo "Source : $ROOT_FILE"
-
-          elif [ -f "$DATA_FILE" ]; then
-
-            echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "path=$DATA_FILE" >> "$GITHUB_OUTPUT"
-
-            echo "Source : $DATA_FILE"
-
-          else
-
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "path=" >> "$GITHUB_OUTPUT"
-
-            echo "::notice::AUCUNE DONNEE"
-            echo "Aucune course inventee"
-            echo "Aucune validation de course effectuee"
-
-          fi
-
-      # ====================================================
-      # 6. INTEGRITE DU JSON SOURCE
-      # ====================================================
-
-      - name: Verifier integrite du JSON source
-        if: steps.donnees.outputs.present == 'true'
-
-        env:
-          COURSES_INPUT: ${{ steps.donnees.outputs.path }}
-
-        run: |
-          set -euo pipefail
-
           python - <<'PY'
-          import json
           import os
           from pathlib import Path
 
-          path = Path(
-              os.environ["COURSES_INPUT"]
-          )
+          candidates = [
+              Path('courses.json'),
+              Path('data/courses.json'),
+          ]
 
-          if not path.is_file():
+          for path in candidates:
+              if path.is_symlink():
+                  raise SystemExit(
+                      f'Lien symbolique interdit : {path}'
+                  )
+              if path.exists() and not path.is_file():
+                  raise SystemExit(
+                      f'Source non reguliere : {path}'
+                  )
+
+          present = [
+              p for p in candidates if p.is_file()
+          ]
+
+          if len(present) > 1:
               raise SystemExit(
-                  "ERREUR : source absente"
+                  'Deux sources de courses : '
+                  'ambiguite interdite'
               )
 
-          if not 0 < path.stat().st_size <= 5_000_000:
-              raise SystemExit(
-                  "ERREUR : taille source invalide"
+          with open(
+              os.environ['GITHUB_OUTPUT'],
+              'a',
+              encoding='utf-8'
+          ) as output:
+              output.write(
+                  f'present={str(bool(present)).lower()}\n'
+              )
+              output.write(
+                  f'path={present[0] if present else ""}\n'
               )
 
-          def unique_pairs(pairs):
-              result = {}
-
-              for key, value in pairs:
-                  if key in result:
-                      raise ValueError(
-                          f"Cle JSON dupliquee : {key}"
-                      )
-
-                  result[key] = value
-
-              return result
-
-          def invalid_constant(value):
-              raise ValueError(
-                  f"Constante JSON interdite : {value}"
-              )
-
-          data = json.loads(
-              path.read_text(
-                  encoding="utf-8-sig"
-              ),
-              object_pairs_hook=unique_pairs,
-              parse_constant=invalid_constant
-          )
-
-          if isinstance(data, list):
-              courses = data
-
-          elif (
-              isinstance(data, dict)
-              and isinstance(
-                  data.get("courses"),
-                  list
-              )
-          ):
-              courses = data["courses"]
-
+          if present:
+              print(f'Source : {present[0]}')
           else:
-              raise SystemExit(
-                  "ERREUR : liste de courses absente"
+              print(
+                  'AUCUNE DONNEE : '
+                  'aucune course inventee'
               )
-
-          if not courses:
-              raise SystemExit(
-                  "ERREUR : aucune course fournie"
-              )
-
-          if len(courses) > 10_000:
-              raise SystemExit(
-                  "ERREUR : trop de courses"
-              )
-
-          print("JSON source : conforme")
-          print("Fichier :", path)
-          print("Nombre de courses :", len(courses))
-          print("Aucune modification effectuee")
           PY
 
-      # ====================================================
-      # 7. VALIDATION STRUCTURELLE DES COURSES
-      # ====================================================
-
-      - name: Executer validation des courses
+      - name: Verifier JSON source strict
         if: steps.donnees.outputs.present == 'true'
-
         env:
           COURSES_INPUT: ${{ steps.donnees.outputs.path }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
 
+          import validation_courses_pmu_v25 as v
+
+          path = Path(
+              os.environ['COURSES_INPUT']
+          )
+
+          if path.is_symlink() or not path.is_file():
+              raise SystemExit('Source invalide')
+
+          if not (
+              0 < path.stat().st_size <= v.MAX_INPUT_BYTES
+          ):
+              raise SystemExit(
+                  'Taille de source invalide'
+              )
+
+          document = v.read_document(path)
+
+          if isinstance(document, list):
+              courses = document
+          elif isinstance(document, dict):
+              courses = document.get('courses')
+          else:
+              courses = None
+
+          if (
+              not isinstance(courses, list)
+              or not courses
+              or len(courses) > v.MAX_COURSES
+          ):
+              raise SystemExit(
+                  'Liste de courses absente, '
+                  'vide ou excessive'
+              )
+
+          print(
+              f'JSON strict : {len(courses)} courses'
+          )
+          PY
+
+      - name: Valider courses sans ecriture dans le depot
+        if: steps.donnees.outputs.present == 'true'
+        env:
+          COURSES_INPUT: ${{ steps.donnees.outputs.path }}
         run: |
           set -euo pipefail
 
-          REPORT="$RUNNER_TEMP/validation-v25.json"
+          REPORT="$RUNNER_TEMP/x1000-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          echo "REPORT_PATH=$REPORT" >> "$GITHUB_ENV"
 
+          set +e
           python validation_courses_pmu_v25.py \
             --input "$COURSES_INPUT" \
             --output "$REPORT"
+          rc=$?
+          set -e
 
-          test -s "$REPORT"
+          echo "VALIDATOR_RC=$rc" >> "$GITHUB_ENV"
 
-          echo "Validation locale terminee"
-          echo "Rapport conserve hors depot"
-          echo "Aucune publication"
+          test -s "$REPORT" || {
+            echo '::error::Rapport absent'
+            exit 1
+          }
 
-      # ====================================================
-      # 8. CONTROLE STRICT DU RAPPORT
-      # ====================================================
+          if [ "$rc" -gt 2 ]; then
+            echo "::error::Code de retour inattendu : $rc"
+            exit 1
+          fi
 
-      - name: Controler rapport V2.5
+      - name: Controler rapport et coherence des donnees
         if: steps.donnees.outputs.present == 'true'
-
+        env:
+          COURSES_INPUT: ${{ steps.donnees.outputs.path }}
         run: |
           set -euo pipefail
-
           python - <<'PY'
           import json
           import os
           from pathlib import Path
 
-          def require(condition, message):
-              if not condition:
-                  raise ValueError(message)
+          import validation_courses_pmu_v25 as v
 
-          def unique_pairs(pairs):
-              result = {}
+          path = Path(
+              os.environ['REPORT_PATH']
+          )
 
-              for key, value in pairs:
-                  require(
-                      key not in result,
-                      f"Cle dupliquee : {key}"
+          if (
+              path.is_symlink()
+              or not path.is_file()
+              or not 0 < path.stat().st_size <= 20_000_000
+          ):
+              raise SystemExit(
+                  'Rapport absent, symbolique '
+                  'ou trop volumineux'
+              )
+
+          report = json.loads(
+              path.read_text(encoding='utf-8-sig'),
+              object_pairs_hook=v._unique_pairs,
+              parse_constant=v._reject_constant
+          )
+
+          expected = v.validate_document(
+              v.read_document(
+                  os.environ['COURSES_INPUT']
+              )
+          )
+
+          if report != expected:
+              raise SystemExit(
+                  'Rapport different du resultat recalcule'
+              )
+
+          if (
+              report['systeme'] != 'X1000 V2.5'
+              or report['mode']
+              != 'VALIDATION_LOCALE_SANS_PUBLICATION'
+          ):
+              raise SystemExit(
+                  'Metadonnees de rapport incorrectes'
+              )
+
+          for field in (
+              'validation_officielle',
+              'collecte_automatique',
+              'publication',
+          ):
+              if report.get(field) is not False:
+                  raise SystemExit(
+                      f'Interdiction non respectee : {field}'
                   )
 
-                  result[key] = value
+          total = report['total']
 
-              return result
-
-          def invalid_constant(value):
-              raise ValueError(
-                  f"Constante interdite : {value}"
+          if not all(
+              type(report[k]) is int
+              and report[k] >= 0
+              for k in (
+                  'total',
+                  'valides',
+                  'invalides',
               )
-
-          report = (
-              Path(os.environ["RUNNER_TEMP"])
-              / "validation-v25.json"
-          )
-
-          require(
-              report.is_file(),
-              "Rapport absent"
-          )
-
-          require(
-              0 < report.stat().st_size <= 2_000_000,
-              "Taille rapport invalide"
-          )
-
-          data = json.loads(
-              report.read_text(
-                  encoding="utf-8-sig"
-              ),
-              object_pairs_hook=unique_pairs,
-              parse_constant=invalid_constant
-          )
-
-          require(
-              isinstance(data, dict),
-              "Rapport non objet"
-          )
-
-          require(
-              data.get("systeme") == "X1000 V2.5",
-              "Systeme incorrect"
-          )
-
-          require(
-              data.get("mode")
-              == "VALIDATION_LOCALE_SANS_PUBLICATION",
-              "Mode incorrect"
-          )
-
-          for key in (
-              "validation_officielle",
-              "collecte_automatique",
-              "publication",
           ):
-              require(
-                  data.get(key) is False,
-                  f"{key} doit etre false"
+              raise SystemExit(
+                  'Compteurs incorrects'
               )
 
-          total = data.get("total")
-          valides = data.get("valides")
-          invalides = data.get("invalides")
-          resultats = data.get("resultats")
-
-          for key, value in (
-              ("total", total),
-              ("valides", valides),
-              ("invalides", invalides),
+          if (
+              total != len(report['resultats'])
+              or report['valides']
+              + report['invalides'] != total
           ):
-              require(
-                  type(value) is int
-                  and value >= 0,
-                  f"Compteur invalide : {key}"
+              raise SystemExit(
+                  'Comptage incoherent'
               )
 
-          require(
-              isinstance(resultats, list),
-              "Resultats invalides"
-          )
+          indices = [
+              item['index']
+              for item in report['resultats']
+          ]
 
-          require(
-              total == len(resultats),
-              "Nombre de resultats incoherent"
-          )
-
-          require(
-              valides + invalides == total,
-              "Compteurs incoherents"
-          )
-
-          require(
-              total > 0,
-              "Aucune course dans le rapport"
-          )
-
-          require(
-              invalides == 0,
-              "Courses invalides detectees"
-          )
-
-          require(
-              valides == total,
-              "Validation incomplete"
-          )
-
-          require(
-              data.get("statut") == "VALIDE",
-              "Statut incorrect"
-          )
-
-          identifiers = set()
-
-          for item in resultats:
-
-              require(
-                  isinstance(item, dict),
-                  "Resultat non objet"
+          if indices != list(
+              range(1, total + 1)
+          ):
+              raise SystemExit(
+                  'Indices incoherents'
               )
 
-              require(
-                  item.get("valide") is True,
-                  "Course invalide"
+          if (
+              report['invalides']
+              or report['statut'] != 'VALIDE'
+          ):
+              raise SystemExit(
+                  f"Courses invalides : "
+                  f"{report['invalides']}"
               )
 
-              require(
-                  item.get("erreurs") == [],
-                  "Erreurs de validation presentes"
+          if os.environ['VALIDATOR_RC'] != '0':
+              raise SystemExit(
+                  'Code retour du validateur incoherent'
               )
 
-              cid = item.get("id")
-
-              require(
-                  isinstance(cid, str)
-                  and bool(cid.strip()),
-                  "Identifiant absent"
-              )
-
-              require(
-                  cid not in identifiers,
-                  "Identifiant duplique"
-              )
-
-              identifiers.add(cid)
-
-              require(
-                  isinstance(
-                      item.get("avertissements"),
-                      list
-                  ),
-                  "Avertissements invalides"
-              )
-
-          print("X1000 V2.5 : RAPPORT CONFORME")
-          print("Courses analysees :", total)
-          print("Courses structurellement valides :", valides)
-          print("Validation officielle : NON")
-          print("Publication : NON")
+          print(
+              f'Rapport conforme : {total} '
+              'courses structurellement valides'
+          )
           PY
 
-      # ====================================================
-      # 9. PROTECTION DU DEPOT ET DES ARCHIVES
-      # ====================================================
-
-      - name: Verifier absence de modifications
+      - name: Verifier depot et archives inchanges
         if: always()
-
         run: |
           set -euo pipefail
 
-          if ! git diff --quiet; then
-            echo "::error::Fichiers suivis modifies"
-            exit 1
-          fi
-
-          if ! git diff --cached --quiet; then
-            echo "::error::Index Git modifie"
-            exit 1
-          fi
-
-          if [ -n "$(
+          git diff --exit-code --quiet
+          git diff --cached --exit-code --quiet
+          test -z "$(
             git ls-files --others --exclude-standard
-          )" ]; then
+          )"
 
-            echo "::error::Fichiers non suivis crees"
-            exit 1
-          fi
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
 
-          echo "Depot inchange : OK"
-          echo "Aucun FIGE modifie"
-          echo "Aucune archive modifiee"
+          saved = (
+              Path(os.environ['RUNNER_TEMP'])
+              / 'x1000-protected-before.json'
+          )
 
-      # ====================================================
-      # 10. BILAN GITHUB ACTIONS
-      # ====================================================
+          if not saved.is_file():
+              raise SystemExit(
+                  'Empreintes initiales absentes : '
+                  'verification impossible'
+              )
 
-      - name: Bilan GitHub
+          before = json.loads(
+              saved.read_text(encoding='utf-8')
+          )
+
+          for name, expected in before.items():
+              path = Path(name)
+
+              if path.is_symlink():
+                  raise SystemExit(
+                      f'Lien symbolique detecte : {name}'
+                  )
+
+              actual = (
+                  hashlib.sha256(
+                      path.read_bytes()
+                  ).hexdigest()
+                  if path.is_file()
+                  else None
+              )
+
+              if actual != expected:
+                  raise SystemExit(
+                      f'Fichier protege modifie : {name}'
+                  )
+
+          print(
+              'Depot, FIGES et archives inchanges'
+          )
+          PY
+
+      - name: Bilan de validation
         if: success()
-
         env:
           DONNEES_PRESENTES: ${{ steps.donnees.outputs.present }}
-
         run: |
           set -euo pipefail
 
           {
-            echo "## X1000 V2.5 - Validation PMU France"
-            echo ""
-            echo "- Branche securisee : OK"
-            echo "- Syntaxe Python : OK"
-            echo "- Autotests V2.5 : OK"
-            echo "- Depot : inchange"
-            echo "- Publication : aucune"
-            echo "- FIGE automatique : aucun"
-            echo "- Transmission M1-M5 : aucune"
-            echo "- Archives : non modifiees"
-            echo "- Commit automatique : aucun"
-            echo ""
+            echo '## X1000 V2.5 - Validation locale'
+            echo ''
+            echo '- Autotests et regressions : OK'
+            echo '- Depot, FIGES et archives : inchanges'
+            echo '- Moteurs M1-M5 : non executes et non modifies'
+            echo '- Collecte automatique : aucune'
+            echo '- FIGE automatique : aucun'
+            echo '- Publication automatique : aucune'
+            echo '- Commit automatique : aucun'
+            echo '- Push automatique : aucun'
 
-            if [ "$DONNEES_PRESENTES" = "true" ]; then
-
-              echo "- Donnees fournies : OUI"
-              echo "- Validation structurelle : CONFORME"
-
+            if [ "$DONNEES_PRESENTES" = 'true' ]; then
+              echo '- Courses fournies : validation structurelle conforme'
             else
-
-              echo "- Donnees fournies : NON"
-              echo "- Statut : AUCUNE DONNEE"
-              echo "- Aucune course validee"
-
+              echo '- AUCUNE DONNEE : aucune course validee'
             fi
 
-            echo ""
-            echo "Validation officielle : NON"
-            echo "Collecte automatique : NON"
-            echo "Publication automatique : NON"
-
+            echo '- Validation officielle : NON'
           } >> "$GITHUB_STEP_SUMMARY"
