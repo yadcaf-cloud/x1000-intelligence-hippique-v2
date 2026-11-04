@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#071521">
+<title>🇸🇳 X1000 V2 — Tableau de bord</title>
+
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #071521;
+  --panel: #102838;
+  --border: #315263;
+  --text: #f0f7f5;
+  --gold: #efce7e;
+  --muted: #b7cbd0;
+  --green: #82e1b6;
+  --red: #ffaaaa;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font: 16px/1.5 system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  max-width: 1100px;
+  margin: auto;
+  padding: 16px;
+}
+
+h1 { color: var(--gold); }
+h2 { margin-top: 0; }
+
+section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 18px;
+  margin: 18px 0;
+}
+
+input {
+  background: var(--bg);
+  color: white;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  width: 100%;
+  font-size: 16px;
+}
+
+button {
+  background: var(--gold);
+  color: var(--bg);
+  border: 0;
+  border-radius: 8px;
+  padding: 12px 18px;
+  margin-top: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  width: 100%;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+small, .muted { color: var(--muted); }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(
+    auto-fit, minmax(130px, 1fr)
+  );
+  gap: 10px;
+}
+
+.engine {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  text-align: center;
+}
+
+.engine strong {
+  color: var(--gold);
+  display: block;
+  font-size: 20px;
+}
+
+.engine span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#state {
+  font-weight: bold;
+}
+
+footer {
+  text-align: center;
+  color: var(--muted);
+  padding: 20px;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+<h1>🇸🇳🧠🔥 X1000 Intelligence Hippique V2</h1>
+<p>Courses françaises — M1 à M5 — FIGÉS — Audits</p>
+<p class="muted">
+Mode consultation uniquement.
+Aucune modification des FIGÉS ni des archives.
+</p>
+</header>
+
+<section>
+<h2>🌐 Connexion API</h2>
+
+<label for="api">Adresse HTTPS de l'API</label>
+<input
+  id="api"
+  type="url"
+  placeholder="https://votre-api.example"
+  autocomplete="url"
+>
+
+<button id="refresh" type="button">
+🔄 Actualiser les données
+</button>
+
+<p id="state" role="status" aria-live="polite">
+API non configurée
+</p>
+
+<pre id="status">Statut non disponible</pre>
+</section>
+
+<section>
+<h2>🧠 Moteurs indépendants</h2>
+
+<div class="grid">
+  <div class="engine">
+    <strong>M1</strong>
+    <span id="m1">Non vérifié</span>
+  </div>
+  <div class="engine">
+    <strong>M2</strong>
+    <span id="m2">Non vérifié</span>
+  </div>
+  <div class="engine">
+    <strong>M3</strong>
+    <span id="m3">Non vérifié</span>
+  </div>
+  <div class="engine">
+    <strong>M4</strong>
+    <span id="m4">Non vérifié</span>
+  </div>
+  <div class="engine">
+    <strong>M5</strong>
+    <span id="m5">Non vérifié</span>
+  </div>
+</div>
+
+<p class="muted">
+Les moteurs sont confirmés uniquement si l'API
+fournit des informations vérifiables.
+</p>
+</section>
+
+<section>
+<h2>🏇 Courses françaises</h2>
+<pre id="courses">Données indisponibles</pre>
+</section>
+
+<section>
+<h2>🧠 Sélections M1 à M5</h2>
+<pre id="selections">Données indisponibles</pre>
+</section>
+
+<section>
+<h2>🔒 FIGÉS avant départ</h2>
+<small>Consultation uniquement. Aucune écriture.</small>
+<pre id="figes">Données indisponibles</pre>
+</section>
+
+<section>
+<h2>📊 Audits et résultats officiels</h2>
+<pre id="audits">Données indisponibles</pre>
+</section>
+
+<section>
+<h2>⚙ Diagnostic technique</h2>
+<pre id="diagnostic">En attente</pre>
+</section>
+
+<footer>
+🇸🇳 X1000 V2 — Intelligence Hippique
+<br>
+Lecture seule — France — M1 à M5
+</footer>
+
+<script>
+"use strict";
+
+const input = document.getElementById("api");
+const state = document.getElementById("state");
+const button = document.getElementById("refresh");
+
+const sections = [
+  "status",
+  "courses",
+  "selections",
+  "figes",
+  "audits",
+  "diagnostic"
+];
+
+let requestId = 0;
+
+try {
+  input.value =
+    localStorage.getItem("x1000-api") || "";
+} catch {
+  input.value = "";
+}
+
+function show(name, value) {
+  const element = document.getElementById(name);
+  if (!element) return;
+
+  element.textContent =
+    JSON.stringify(value, null, 2);
+}
+
+function resetEngines() {
+  for (let i = 1; i <= 5; i++) {
+    document.getElementById("m" + i).textContent =
+      "Non vérifié";
+  }
+}
+
+function updateEngines(status) {
+  resetEngines();
+
+  if (!status || typeof status !== "object") {
+    return;
+  }
+
+  const engines = status.moteurs || status.engines;
+
+  if (!engines || typeof engines !== "object") {
+    return;
+  }
+
+  for (let i = 1; i <= 5; i++) {
+    const key = "M" + i;
+    const engine =
+      engines[key] || engines[key.toLowerCase()];
+
+    const element = document.getElementById("m" + i);
+
+    if (engine === true) {
+      element.textContent = "Actif (API)";
+    } else if (engine === false) {
+      element.textContent = "Inactif (API)";
+    } else if (engine && typeof engine === "object") {
+      const value = engine.actif ?? engine.active;
+
+      if (value === true) {
+        element.textContent = "Actif (API)";
+      } else if (value === false) {
+        element.textContent = "Inactif (API)";
+      }
+    }
+  }
+}
+
+async function fetchJSON(base, endpoint) {
+  const controller = new AbortController();
+
+  const timeout = setTimeout(
+    () => controller.abort(),
+    10000
+  );
+
+  try {
+    const response = await fetch(
+      base + "/api/" + endpoint,
+      {
+        method: "GET",
+        signal: controller.signal,
+        cache: "no-store",
+        redirect: "error",
+        headers: {
+          "Accept": "application/json"
+        }
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error("HTTP " + response.status);
+    }
+
+    return await response.json();
+
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function refresh() {
+  if (button.disabled) return;
+
+  const id = ++requestId;
+  const base = input.value.trim().replace(/\/+$/, "");
+
+  let url;
+
+  try {
+    url = new URL(base);
+
+    if (url.protocol !== "https:") {
+      throw new Error("HTTPS obligatoire");
+    }
+
+    if (url.username || url.password) {
+      throw new Error("Identifiants interdits");
+    }
+
+    if (url.search || url.hash) {
+      throw new Error("URL sans paramètres requise");
+    }
+
+  } catch (error) {
+    state.textContent =
+      "Adresse API invalide : " + error.message;
+    return;
+  }
+
+  try {
+    localStorage.setItem("x1000-api", base);
+  } catch {
+    // Le stockage local reste facultatif.
+  }
+
+  button.disabled = true;
+  state.textContent = "Connexion en cours...";
+
+  resetEngines();
+
+  sections.forEach(name => {
+    document.getElementById(name).textContent =
+      "Chargement...";
+  });
+
+  try {
+    const results = await Promise.allSettled(
+      sections.map(name => fetchJSON(base, name))
+    );
+
+    if (id !== requestId) return;
+
+    let failures = 0;
+
+    results.forEach((result, index) => {
+      const name = sections[index];
+
+      if (result.status === "fulfilled") {
+        show(name, result.value);
+
+        if (name === "status") {
+          updateEngines(result.value);
+        }
+
+      } else {
+        failures++;
+
+        const error = result.reason;
+
+        const message =
+          error?.name === "AbortError"
+            ? "Délai dépassé (10 secondes)"
+            : (error?.message || "Connexion impossible");
+
+        document.getElementById(name).textContent =
+          "Indisponible : " + message;
+      }
+    });
+
+    if (failures === 0) {
+      state.textContent =
+        "✅ API accessible — données actualisées";
+    } else {
+      state.textContent =
+        "⚠️ " + failures +
+        " rubrique(s) indisponible(s) sur " +
+        sections.length +
+        ". Vérifiez l'API et CORS.";
+    }
+
+  } catch (error) {
+    state.textContent =
+      "Erreur technique : " + error.message;
+
+  } finally {
+    button.disabled = false;
+  }
+}
+
+button.addEventListener("click", refresh);
+</script>
+
+</body>
+</html>
