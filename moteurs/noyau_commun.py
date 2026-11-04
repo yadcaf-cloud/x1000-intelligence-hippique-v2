@@ -12,7 +12,7 @@ Fonctions :
 - Classements complets ou partiels.
 - Detection des indicateurs faibles.
 - Validation stricte des fichiers JSON.
-- Traçabilite SHA-256.
+- Tracabilite SHA-256.
 - Execution en lecture seule.
 
 Aucune collecte PMU.
@@ -34,7 +34,7 @@ import math
 import re
 import sys
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -45,6 +45,7 @@ TAILLE_MAX_OCTETS = 5 * 1024 * 1024
 
 MIN_PARTANTS = 5
 SEUIL_RISQUE = 40.0
+MAX_AVANCE_DEPART = timedelta(days=30)
 
 STATUT_DISPONIBLE = "ANALYSE_DISPONIBLE"
 STATUT_INSUFFISANT = "DONNEES_INSUFFISANTES"
@@ -163,7 +164,6 @@ def verifier_configuration(
             "Somme des coefficients invalide"
         )
 
-    # Evite les calculs intermediaires non finis.
     for coefficient in coefficients:
         if not math.isfinite(coefficient / total):
             raise ValueError(
@@ -217,8 +217,19 @@ def verifier_course(
         ):
             return False, "Fuseau horaire absent"
 
-        if date_depart <= datetime.now(timezone.utc):
+        avance = (
+            date_depart.astimezone(timezone.utc)
+            - datetime.now(timezone.utc)
+        )
+
+        if avance <= timedelta(0):
             return False, "Depart deja passe"
+
+        if avance > MAX_AVANCE_DEPART:
+            return False, (
+                "Depart trop eloigne : "
+                "verification necessaire"
+            )
 
     except (ValueError, TypeError, OverflowError):
         return False, "Date de depart invalide"
@@ -279,7 +290,10 @@ def verifier_course(
         if not isinstance(liste, list):
             return False, "Liste des non-partants invalide"
 
-        if any(type(n) is not int for n in liste):
+        if any(
+            type(n) is not int or n <= 0
+            for n in liste
+        ):
             return False, "Numero de non-partant invalide"
 
         if len(liste) != len(set(liste)):
@@ -361,12 +375,8 @@ def analyser_cheval(
         if note is None:
             continue
 
-        coefficient = float(poids_critere)
-
-        # Normalisation avant multiplication pour
-        # limiter les risques de debordement.
         coefficient_normalise = (
-            coefficient / total_poids
+            float(poids_critere) / total_poids
         )
 
         criteres[critere] = note
@@ -382,11 +392,9 @@ def analyser_cheval(
         max(0.0, couverture)
     )
 
-    seuil = float(couverture_min)
-
     admissible = (
         couverture > 0
-        and couverture + 1e-12 >= seuil
+        and couverture + 1e-12 >= float(couverture_min)
     )
 
     score_brut = None
@@ -641,7 +649,139 @@ def charger_json_securise(
 
 
 # ============================================================
-# 9. EXECUTION EN LECTURE SEULE
+# 9. VALIDATION DES SORTIES
+# ============================================================
+
+def verifier_sortie_analyse(
+    course: Any,
+    resultat: dict,
+) -> None:
+    """Controle les classements avant sortie JSON."""
+
+    statut = resultat.get("statut")
+
+    if statut not in STATUTS_VALIDES:
+        raise ValueError(
+            "Statut d'analyse invalide"
+        )
+
+    if resultat.get("fige") is not False:
+        raise ValueError(
+            "FIGE interdit dans le noyau"
+        )
+
+    if resultat.get("publication") is not False:
+        raise ValueError(
+            "Publication interdite"
+        )
+
+    if (
+        not isinstance(resultat.get("moteur"), str)
+        or not resultat["moteur"].strip()
+    ):
+        raise ValueError(
+            "Identifiant de moteur absent"
+        )
+
+    if (
+        not isinstance(course, dict)
+        or resultat.get("course_id") != course.get("id")
+    ):
+        raise ValueError(
+            "Identifiant de course incoherent"
+        )
+
+    classement = resultat.get("classement")
+    partiel = resultat.get("classement_partiel")
+
+    if (
+        not isinstance(classement, list)
+        or not isinstance(partiel, list)
+    ):
+        raise ValueError(
+            "Classement invalide"
+        )
+
+    if statut == STATUT_DISPONIBLE:
+
+        if len(classement) != 5 or partiel:
+            raise ValueError(
+                "Cinq positions completes requises"
+            )
+
+    elif statut == STATUT_INSUFFISANT:
+
+        if classement or len(partiel) >= 5:
+            raise ValueError(
+                "Classement partiel incoherent"
+            )
+
+    elif classement or partiel:
+        raise ValueError(
+            "Classement interdit pour course "
+            "non analysable"
+        )
+
+    actifs = {
+        cheval["numero"]
+        for cheval in course.get("partants", [])
+        if isinstance(cheval, dict)
+        and type(cheval.get("numero")) is int
+        and cheval.get("non_partant") is False
+    }
+
+    positions = (
+        classement
+        if statut == STATUT_DISPONIBLE
+        else partiel
+    )
+
+    numeros = []
+
+    for indice, ligne in enumerate(
+        positions,
+        start=1,
+    ):
+
+        if not isinstance(ligne, dict):
+            raise ValueError(
+                "Ligne de classement invalide"
+            )
+
+        numero = ligne.get("numero")
+
+        if type(numero) is not int or numero not in actifs:
+            raise ValueError(
+                "Cheval classe absent ou non-partant"
+            )
+
+        if (
+            type(ligne.get("position_predite")) is not int
+            or ligne["position_predite"] != indice
+        ):
+            raise ValueError(
+                "Ordre des positions invalide"
+            )
+
+        numeros.append(numero)
+
+    if len(numeros) != len(set(numeros)):
+        raise ValueError(
+            "Cheval classe plusieurs fois"
+        )
+
+    if statut != STATUT_NON_ANALYSABLE:
+
+        valide, raison = verifier_course(course)
+
+        if not valide:
+            raise ValueError(
+                f"Course devenue non analysable : {raison}"
+            )
+
+
+# ============================================================
+# 10. EXECUTION EN LECTURE SEULE
 # ============================================================
 
 def executer(
@@ -683,25 +823,12 @@ def executer(
                 "Resultat d'analyse invalide"
             )
 
-        statut = resultat.get("statut")
+        verifier_sortie_analyse(
+            course,
+            resultat,
+        )
 
-        if statut not in STATUTS_VALIDES:
-            raise ValueError(
-                "Statut d'analyse invalide"
-            )
-
-        # La sortie doit rester une analyse,
-        # jamais une publication ou un FIGE.
-        if resultat.get("fige") is not False:
-            raise ValueError(
-                "FIGE interdit dans le noyau"
-            )
-
-        if resultat.get("publication") is not False:
-            raise ValueError(
-                "Publication interdite"
-            )
-
+        resultat = dict(resultat)
         resultat["source_sha256"] = empreinte
 
         sortie = json.dumps(
@@ -713,7 +840,7 @@ def executer(
 
         print(sortie)
 
-        if statut == STATUT_DISPONIBLE:
+        if resultat["statut"] == STATUT_DISPONIBLE:
             return 0
 
         return 2
