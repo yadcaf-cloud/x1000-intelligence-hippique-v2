@@ -5,12 +5,14 @@ on:
   push:
     branches:
       - feature/installation-x1000-v2
+      - fix/x1000-v2-reparation-controlee
     paths:
       - "M*.py"
       - "m*.py"
       - "moteurs/**"
       - "tests/**"
       - "test_*.py"
+      - "api.py"
       - "validation_moteurs.py"
       - "coordination_x1000.py"
       - "config_x1000.py"
@@ -26,7 +28,11 @@ concurrency:
 jobs:
   validation:
     name: Controle M1-M5 sans publication
-    if: github.ref == 'refs/heads/feature/installation-x1000-v2'
+    if: >-
+      ${{
+        github.ref == 'refs/heads/feature/installation-x1000-v2' ||
+        github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee'
+      }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
@@ -53,11 +59,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          test "$GITHUB_REF" = \
-            "refs/heads/feature/installation-x1000-v2"
+          case "$GITHUB_REF" in
+            refs/heads/feature/installation-x1000-v2|refs/heads/fix/x1000-v2-reparation-controlee)
+              echo "Reference autorisee : $GITHUB_REF"
+              ;;
+            *)
+              echo "::error::Branche non autorisee"
+              exit 1
+              ;;
+          esac
 
-          test "$(git branch --show-current)" = \
-            "feature/installation-x1000-v2"
+          BRANCH="${GITHUB_REF#refs/heads/}"
+
+          test "$(git branch --show-current)" = "$BRANCH"
 
           echo "Branche securisee : OK"
 
@@ -95,9 +109,7 @@ jobs:
 
           for path in files:
               ast.parse(
-                  path.read_text(
-                      encoding="utf-8-sig"
-                  ),
+                  path.read_text(encoding="utf-8-sig"),
                   filename=str(path)
               )
               print("SYNTAXE OK :", path)
@@ -175,6 +187,7 @@ jobs:
           from pathlib import Path
 
           required = (
+              "api.py",
               "validation_moteurs.py",
               "coordination_x1000.py",
               "config_x1000.py"
@@ -196,6 +209,58 @@ jobs:
               print("COMPOSANT OK :", name)
           PY
 
+      - name: Tester chargement API M1-M5
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import api
+          import importlib
+
+          names = ("M1", "M2", "M3", "M4", "M5")
+
+          for name in names:
+              if not api.engine_available(name):
+                  raise SystemExit(
+                      f"ERREUR : {name} absent dans API"
+                  )
+
+              if name == "M1":
+                  module = importlib.import_module(
+                      "moteurs.m1"
+                  )
+              else:
+                  path = api.engine_path(name)
+                  import importlib.util
+
+                  spec = importlib.util.spec_from_file_location(
+                      "test_" + name.lower(),
+                      path
+                  )
+
+                  if spec is None or spec.loader is None:
+                      raise SystemExit(
+                          f"ERREUR : chargement {name}"
+                      )
+
+                  module = importlib.util.module_from_spec(
+                      spec
+                  )
+                  spec.loader.exec_module(module)
+
+              if not callable(
+                  getattr(module, "analyser_course", None)
+              ):
+                  raise SystemExit(
+                      f"ERREUR : analyser_course {name}"
+                  )
+
+              print(f"IMPORT {name} : OK")
+
+          print("Chargement API M1-M5 : OK")
+          PY
+
       - name: Executer tests Python
         shell: bash
         run: |
@@ -213,9 +278,7 @@ jobs:
               Path(".").glob("test_*.py")
           ):
               suite.addTests(
-                  loader.loadTestsFromName(
-                      path.stem
-                  )
+                  loader.loadTestsFromName(path.stem)
               )
 
           folder = Path("tests")
@@ -248,6 +311,43 @@ jobs:
           print("Tests Python : REUSSIS")
           PY
 
+      - name: Verifier API lecture seule
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import api
+
+          required = (
+              "/api/status",
+              "/api/courses",
+              "/api/selections",
+              "/api/figes",
+              "/api/audits",
+              "/api/diagnostic"
+          )
+
+          for route in required:
+              if route not in api.ROUTES:
+                  raise SystemExit(
+                      f"ERREUR : route absente {route}"
+                  )
+
+          for method in (
+              "do_POST",
+              "do_PUT",
+              "do_PATCH",
+              "do_DELETE"
+          ):
+              if not hasattr(api.Handler, method):
+                  raise SystemExit(
+                      f"ERREUR : protection absente {method}"
+                  )
+
+          print("API lecture seule : controles OK")
+          PY
+
       - name: Verifier depot inchange
         if: always()
         shell: bash
@@ -276,18 +376,20 @@ jobs:
           set -euo pipefail
 
           {
-            echo "## X1000 V2.4 - M1 a M5"
+            echo "## X1000 V2.4 - Validation M1-M5"
             echo ""
             echo "- Branche securisee : OK"
             echo "- Syntaxe Python : OK"
             echo "- Cinq moteurs : presents"
+            echo "- Chargement API M1-M5 : OK"
             echo "- Composants centraux : presents"
             echo "- Tests Python : reussis"
+            echo "- Routes API : controlees"
             echo "- Depot : inchange"
             echo "- Publication : aucune"
             echo "- FIGE : aucun par le workflow"
             echo "- Commit automatique : aucun"
             echo ""
             echo "Aucune prediction publiee."
-            echo "Autonomie sportive non certifiee."
+            echo "Execution sportive complete non certifiee."
           } >> "$GITHUB_STEP_SUMMARY"
