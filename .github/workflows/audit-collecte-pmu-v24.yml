@@ -5,9 +5,10 @@ on:
   push:
     branches:
       - feature/installation-x1000-v2
+      - fix/x1000-v2-reparation-controlee
     paths:
-      - audit_collecte_pmu.py
-      - .github/workflows/audit-collecte-pmu-v24.yml
+      - "audit_collecte_pmu.py"
+      - ".github/workflows/audit-collecte-pmu-v24.yml"
 
 permissions:
   contents: read
@@ -19,7 +20,13 @@ concurrency:
 jobs:
   audit-pmu:
     name: Audit PMU sans publication
-    if: github.ref == 'refs/heads/feature/installation-x1000-v2'
+
+    if: >-
+      ${{
+        github.ref == 'refs/heads/feature/installation-x1000-v2' ||
+        github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee'
+      }}
+
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
@@ -28,8 +35,10 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
       PYTHONNOUSERSITE: "1"
+      PYTHONPATH: "."
 
     steps:
+
       - name: Recuperer branche securisee
         uses: actions/checkout@v4
         with:
@@ -40,26 +49,40 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Verifier fichier et syntaxe
+      - name: Verifier branche et syntaxe
         shell: bash
         run: |
           set -euo pipefail
 
-          test "$GITHUB_REF" = \
-            "refs/heads/feature/installation-x1000-v2"
+          case "$GITHUB_REF" in
+            refs/heads/feature/installation-x1000-v2|refs/heads/fix/x1000-v2-reparation-controlee)
+              echo "Branche autorisee : $GITHUB_REF"
+              ;;
+            *)
+              echo "::error::Branche non autorisee"
+              exit 1
+              ;;
+          esac
+
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
           python - <<'PY'
           import ast
           from pathlib import Path
 
           path = Path("audit_collecte_pmu.py")
+
           if not path.is_file():
               raise SystemExit("Script audit absent")
+
+          if path.stat().st_size == 0:
+              raise SystemExit("Script audit vide")
 
           ast.parse(
               path.read_text(encoding="utf-8-sig"),
               filename=str(path)
           )
+
           print("Syntaxe audit : OK")
           PY
 
@@ -109,6 +132,7 @@ jobs:
           )
 
           require(report.is_file(), "Rapport absent")
+
           require(
               0 < report.stat().st_size <= 65536,
               "Taille rapport invalide"
@@ -120,8 +144,16 @@ jobs:
               parse_constant=invalid_constant
           )
 
-          require(isinstance(data, dict), "Objet attendu")
-          require(data.get("version") == "2.4", "Version")
+          require(
+              isinstance(data, dict),
+              "Objet attendu"
+          )
+
+          require(
+              data.get("version") == "2.4",
+              "Version incorrecte"
+          )
+
           require(
               data.get("statut")
               == "AUDIT_SEUL_SANS_PUBLICATION",
@@ -148,7 +180,10 @@ jobs:
                   f"{key} doit etre zero"
               )
 
-          for key in ("reunions", "courses_brutes"):
+          for key in (
+              "reunions",
+              "courses_brutes"
+          ):
               require(
                   type(data.get(key)) is int
                   and data[key] >= 0,
@@ -182,6 +217,7 @@ jobs:
           )
 
           digest = data.get("source_sha256")
+
           require(
               isinstance(digest, str)
               and re.fullmatch(
@@ -191,6 +227,7 @@ jobs:
           )
 
           collected = data.get("collecte_a")
+
           require(
               isinstance(collected, str),
               "Horodatage absent"
@@ -230,6 +267,25 @@ jobs:
           )
           PY
 
+      - name: Verifier depot inchange
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! git diff --quiet ||
+             ! git diff --cached --quiet; then
+            echo "::error::Fichiers suivis modifies"
+            exit 1
+          fi
+
+          if [ -n "$(git ls-files --others --exclude-standard)" ]; then
+            echo "::error::Fichiers non suivis crees"
+            exit 1
+          fi
+
+          echo "Depot inchange : OK"
+
       - name: Bilan de securite
         if: success()
         shell: bash
@@ -243,7 +299,8 @@ jobs:
             echo "- M1-M5 : non alimentes"
             echo "- FIGE : aucun"
             echo "- Publication : aucune"
-            echo "- Archives : non modifiees par le workflow"
+            echo "- Depot : inchange"
+            echo "- Commit automatique : aucun"
             echo ""
             echo "Aucune validation sportive."
             echo "Aucune preuve independante de source."
