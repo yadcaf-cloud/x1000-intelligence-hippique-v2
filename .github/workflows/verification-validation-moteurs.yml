@@ -1,0 +1,88 @@
+name: X1000 V2 - Verification validation moteurs
+
+on:
+  workflow_dispatch:
+
+  push:
+    paths:
+      - "validation_moteurs.py"
+      - ".github/workflows/verification-validation-moteurs.yml"
+
+  pull_request:
+    paths:
+      - "validation_moteurs.py"
+      - ".github/workflows/verification-validation-moteurs.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x1000-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verification:
+    name: Verification syntaxique sans execution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONNOUSERSITE: "1"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verifier la presence du module
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f validation_moteurs.py
+          test ! -L validation_moteurs.py
+          echo "MODULE_PRESENT"
+
+      - name: Verifier la syntaxe Python
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -B - <<'PY'
+          import ast
+          from pathlib import Path
+
+          fichier = Path("validation_moteurs.py")
+
+          source = fichier.read_text(
+              encoding="utf-8"
+          )
+
+          ast.parse(
+              source,
+              filename=str(fichier)
+          )
+
+          print("SYNTAXE_OK")
+          PY
+
+      - name: Confirmer les limites de verification
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "X1000 V2 - VERIFICATION TERMINEE"
+          echo "M1-M5 : non executes"
+          echo "Collecte PMU : aucune"
+          echo "Publication : aucune"
+          echo "FIGE : aucun"
+          echo "Archives : non modifiees"
+          echo "Commit automatique : aucun"
+          echo "Push automatique : aucun"
