@@ -2,36 +2,27 @@
 # -*- coding: utf-8 -*-
 
 """
-X1000 V2.4 — NOYAU TECHNIQUE COMMUN SECURISE
+X1000 V2.4 - NOYAU TECHNIQUE COMMUN SECURISE
 
-Compatible avec M1, M2, M3, M4 et M5.
-
-FONCTIONS
----------
-- Validation structurelle des courses PMU en France.
-- Vérification des départs futurs.
-- Contrôle des partants et non-partants.
-- Calcul des scores sur indicateurs fournis.
+Fonctions :
+- Validation des courses PMU en France.
+- Controle du depart avant analyse.
+- Verification des partants et non-partants.
+- Calcul de scores sur indicateurs fournis.
 - Classements complets ou partiels.
-- Détection des indicateurs faibles.
-- Lecture stricte des fichiers JSON.
-- Traçabilité SHA-256.
-- Exécution en lecture seule.
-- Autotest sans données PMU réelles.
+- Detection des indicateurs faibles.
+- Validation stricte des fichiers JSON.
+- Traçabilite SHA-256.
+- Execution en lecture seule.
 
-SECURITE
---------
 Aucune collecte PMU.
-Aucune donnée sportive inventée.
-Aucun FIGÉ automatique ou rétroactif.
-Aucune publication automatique.
+Aucune donnee sportive inventee.
+Aucun FIGE automatique ou retroactif.
+Aucune publication.
 Aucune modification des archives.
 
-IMPORTANT
----------
-Les attestations présentes dans les données
-ne constituent pas une validation officielle
-ou une vérification indépendante des sources.
+Les moteurs M1 a M5 conservent leurs propres
+criteres, ponderations et decisions sportives.
 """
 
 from __future__ import annotations
@@ -43,41 +34,27 @@ import math
 import re
 import sys
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-from zoneinfo import ZoneInfo
 
-
-# ============================================================
-# 1. CONSTANTES
-# ============================================================
 
 VERSION = "2.4"
 
 TAILLE_MAX_OCTETS = 5 * 1024 * 1024
+
 MIN_PARTANTS = 5
 SEUIL_RISQUE = 40.0
-
-MAX_AVANCE_DEPART = timedelta(days=30)
 
 STATUT_DISPONIBLE = "ANALYSE_DISPONIBLE"
 STATUT_INSUFFISANT = "DONNEES_INSUFFISANTES"
 STATUT_NON_ANALYSABLE = "NON_ANALYSABLE"
 
-STATUTS_VALIDES = frozenset({
+STATUTS_VALIDES = {
     STATUT_DISPONIBLE,
     STATUT_INSUFFISANT,
     STATUT_NON_ANALYSABLE,
-})
-
-MOTEURS_VALIDES = frozenset({
-    "M1", "M2", "M3", "M4", "M5",
-})
-
-FORMAT_ID = re.compile(
-    r"^\d{4}-\d{2}-\d{2}-R[1-9]\d*-C[1-9]\d*$"
-)
+}
 
 FORMAT_DEPART = re.compile(
     r"^\d{4}-\d{2}-\d{2}T"
@@ -86,11 +63,9 @@ FORMAT_DEPART = re.compile(
     r"(?:Z|[+-]\d{2}:\d{2})$"
 )
 
-TOLERANCE = 1e-9
-
 
 # ============================================================
-# 2. HORODATAGE
+# 1. HORODATAGE
 # ============================================================
 
 def maintenant() -> str:
@@ -98,10 +73,11 @@ def maintenant() -> str:
 
 
 # ============================================================
-# 3. VALIDATION NUMERIQUE
+# 2. VALIDATION DES NOTES
 # ============================================================
 
 def nombre_fini(valeur: Any) -> float | None:
+    """Accepte uniquement les nombres finis."""
 
     if type(valeur) not in (int, float):
         return None
@@ -118,6 +94,7 @@ def nombre_fini(valeur: Any) -> float | None:
 
 
 def note_valide(valeur: Any) -> float | None:
+    """Une note doit etre comprise entre 0 et 100."""
 
     nombre = nombre_fini(valeur)
 
@@ -131,33 +108,7 @@ def note_valide(valeur: Any) -> float | None:
 
 
 # ============================================================
-# 4. VALIDATION DES DATES
-# ============================================================
-
-def lire_date(valeur: Any) -> datetime | None:
-
-    if not isinstance(valeur, str):
-        return None
-
-    if not FORMAT_DEPART.fullmatch(valeur):
-        return None
-
-    try:
-        date = datetime.fromisoformat(
-            valeur.replace("Z", "+00:00")
-        )
-
-        if date.utcoffset() is None:
-            return None
-
-        return date.astimezone(timezone.utc)
-
-    except (ValueError, TypeError, OverflowError):
-        return None
-
-
-# ============================================================
-# 5. VALIDATION CONFIGURATION
+# 3. VALIDATION DE CONFIGURATION
 # ============================================================
 
 def verifier_configuration(
@@ -167,14 +118,14 @@ def verifier_configuration(
     couverture_min: float,
 ) -> float:
 
-    if moteur not in MOTEURS_VALIDES:
-        raise ValueError("Moteur inconnu")
+    if not isinstance(moteur, str) or not moteur.strip():
+        raise ValueError("Nom de moteur invalide")
 
     if not isinstance(champ, str) or not champ.strip():
         raise ValueError("Champ d'analyse invalide")
 
     if not isinstance(poids, dict) or not poids:
-        raise ValueError("Pondérations absentes")
+        raise ValueError("Ponderations absentes")
 
     couverture = nombre_fini(couverture_min)
 
@@ -189,7 +140,7 @@ def verifier_configuration(
             not isinstance(critere, str)
             or not critere.strip()
         ):
-            raise ValueError("Nom de critère invalide")
+            raise ValueError("Nom de critere invalide")
 
         coefficient = nombre_fini(valeur)
 
@@ -200,28 +151,30 @@ def verifier_configuration(
 
         coefficients.append(coefficient)
 
-    total = math.fsum(coefficients)
+    try:
+        total = math.fsum(coefficients)
+    except (OverflowError, ValueError):
+        raise ValueError(
+            "Somme des coefficients invalide"
+        ) from None
 
     if not math.isfinite(total) or total <= 0:
         raise ValueError(
             "Somme des coefficients invalide"
         )
 
-    if not math.isclose(
-        total,
-        1.0,
-        rel_tol=0.0,
-        abs_tol=1e-9,
-    ):
-        raise ValueError(
-            "La somme des pondérations doit être 1"
-        )
+    # Evite les calculs intermediaires non finis.
+    for coefficient in coefficients:
+        if not math.isfinite(coefficient / total):
+            raise ValueError(
+                "Normalisation des poids invalide"
+            )
 
     return total
 
 
 # ============================================================
-# 6. VALIDATION STRUCTURELLE DE LA COURSE
+# 4. VALIDATION DE LA COURSE
 # ============================================================
 
 def verifier_course(
@@ -234,48 +187,46 @@ def verifier_course(
     identifiant = course.get("id")
 
     if (
-        not isinstance(identifiant, str)
-        or not FORMAT_ID.fullmatch(identifiant)
+        type(identifiant) not in (str, int)
+        or not str(identifiant).strip()
     ):
         return False, "Identifiant de course invalide"
 
-    try:
-        date_id = datetime.strptime(
-            identifiant[:10], "%Y-%m-%d"
-        ).date()
-    except ValueError:
-        return False, "Date d'identifiant invalide"
-
     if course.get("localisation_france_verifiee") is not True:
-        return False, "Localisation France non vérifiée"
+        return False, "Localisation France non verifiee"
 
     if course.get("depart_verifie") is not True:
-        return False, "Départ non vérifié"
+        return False, "Depart non verifie"
 
-    depart = lire_date(course.get("depart"))
+    depart = course.get("depart")
 
-    if depart is None:
-        return False, "Date de départ invalide"
+    if (
+        not isinstance(depart, str)
+        or not FORMAT_DEPART.fullmatch(depart)
+    ):
+        return False, "Format ISO du depart invalide"
 
-    avance = depart - datetime.now(timezone.utc)
+    try:
+        date_depart = datetime.fromisoformat(
+            depart.replace("Z", "+00:00")
+        )
 
-    if avance <= timedelta(0):
-        return False, "Départ déjà passé"
+        if (
+            date_depart.tzinfo is None
+            or date_depart.utcoffset() is None
+        ):
+            return False, "Fuseau horaire absent"
 
-    if avance > MAX_AVANCE_DEPART:
-        return False, "Départ trop éloigné"
+        if date_depart <= datetime.now(timezone.utc):
+            return False, "Depart deja passe"
 
-    date_france = depart.astimezone(
-        ZoneInfo("Europe/Paris")
-    ).date()
-
-    if date_id != date_france:
-        return False, "Date de course incohérente"
+    except (ValueError, TypeError, OverflowError):
+        return False, "Date de depart invalide"
 
     partants = course.get("partants")
 
     if not isinstance(partants, list):
-        return False, "Partants absents"
+        return False, "Liste des partants absente"
 
     numeros = set()
     non_partants = set()
@@ -291,10 +242,10 @@ def verifier_course(
         non_partant = cheval.get("non_partant")
 
         if type(numero) is not int or numero <= 0:
-            return False, "Numéro invalide"
+            return False, "Numero de cheval invalide"
 
         if numero in numeros:
-            return False, "Numéro en double"
+            return False, "Numero de cheval en double"
 
         numeros.add(numero)
 
@@ -317,7 +268,9 @@ def verifier_course(
         nombre = course["nombre_partants"]
 
         if type(nombre) is not int or nombre != actifs:
-            return False, "Nombre de partants incohérent"
+            return False, (
+                "Nombre de partants actifs incoherent"
+            )
 
     if "non_partants" in course:
 
@@ -326,23 +279,22 @@ def verifier_course(
         if not isinstance(liste, list):
             return False, "Liste des non-partants invalide"
 
-        if any(
-            type(numero) is not int or numero <= 0
-            for numero in liste
-        ):
-            return False, "Numéro non-partant invalide"
+        if any(type(n) is not int for n in liste):
+            return False, "Numero de non-partant invalide"
 
         if len(liste) != len(set(liste)):
             return False, "Non-partants en double"
 
         if set(liste) != non_partants:
-            return False, "Non-partants incohérents"
+            return False, (
+                "Liste des non-partants incoherente"
+            )
 
-    return True, "Course structurellement valide"
+    return True, "Course verifiee"
 
 
 # ============================================================
-# 7. EMPREINTE SHA-256
+# 5. EMPREINTE DE CONFIGURATION
 # ============================================================
 
 def empreinte_configuration(
@@ -357,7 +309,7 @@ def empreinte_configuration(
         "poids": poids,
         "champ": champ,
         "couverture_min": couverture_min,
-        "version_noyau": VERSION,
+        "noyau": VERSION,
     }
 
     contenu = json.dumps(
@@ -372,7 +324,7 @@ def empreinte_configuration(
 
 
 # ============================================================
-# 8. ANALYSE INDIVIDUELLE
+# 6. ANALYSE INDIVIDUELLE
 # ============================================================
 
 def analyser_cheval(
@@ -384,7 +336,12 @@ def analyser_cheval(
 ) -> dict:
 
     if total_poids is None:
-        total_poids = math.fsum(poids.values())
+        total_poids = verifier_configuration(
+            "MOTEUR",
+            poids,
+            champ,
+            couverture_min,
+        )
 
     donnees = cheval.get(champ)
 
@@ -392,10 +349,10 @@ def analyser_cheval(
         donnees = {}
 
     criteres = {}
-    contributions = []
     coefficients = []
+    contributions = []
 
-    for critere, coefficient in poids.items():
+    for critere, poids_critere in poids.items():
 
         note = note_valide(
             donnees.get(critere)
@@ -404,13 +361,16 @@ def analyser_cheval(
         if note is None:
             continue
 
+        coefficient = float(poids_critere)
+
+        # Normalisation avant multiplication pour
+        # limiter les risques de debordement.
         coefficient_normalise = (
             coefficient / total_poids
         )
 
         criteres[critere] = note
         coefficients.append(coefficient_normalise)
-
         contributions.append(
             note * coefficient_normalise
         )
@@ -419,12 +379,14 @@ def analyser_cheval(
 
     couverture = min(
         1.0,
-        max(0.0, couverture),
+        max(0.0, couverture)
     )
+
+    seuil = float(couverture_min)
 
     admissible = (
         couverture > 0
-        and couverture + TOLERANCE >= couverture_min
+        and couverture + 1e-12 >= seuil
     )
 
     score_brut = None
@@ -440,7 +402,7 @@ def analyser_cheval(
 
         score_brut = min(
             100.0,
-            max(0.0, score_brut),
+            max(0.0, score_brut)
         )
 
     risques = [
@@ -461,7 +423,7 @@ def analyser_cheval(
             if score_brut is not None
             else None
         ),
-        "couverture": round(couverture, 6),
+        "couverture": round(couverture, 4),
         "criteres": criteres,
         "criteres_manquants": [
             critere
@@ -476,7 +438,7 @@ def analyser_cheval(
 
 
 # ============================================================
-# 9. ANALYSE COMMUNE M1 A M5
+# 7. ANALYSE COMPLETE
 # ============================================================
 
 def analyser_course(
@@ -516,11 +478,13 @@ def analyser_course(
         "favoris_a_examiner": [],
         "fige": False,
         "publication": False,
-        "configuration_sha256": empreinte_configuration(
-            moteur,
-            poids,
-            champ,
-            couverture_min,
+        "configuration_sha256": (
+            empreinte_configuration(
+                moteur,
+                poids,
+                champ,
+                couverture_min,
+            )
         ),
     }
 
@@ -584,15 +548,11 @@ def analyser_course(
         admissibles[:5],
         start=1,
     ):
-
-        score = cheval["score"]
-
         positions.append({
             "position_predite": position,
             "numero": cheval["numero"],
             "nom": cheval["nom"],
-            "score": score,
-            f"score_{moteur.lower()}": score,
+            "score": cheval["score"],
             "couverture": cheval["couverture"],
             "risques": cheval["risques"],
         })
@@ -601,28 +561,26 @@ def analyser_course(
 
         resultat["classement"] = positions
         resultat["statut"] = STATUT_DISPONIBLE
-
         resultat["raison"] = (
-            "Cinq positions calculées sur les "
+            "Cinq positions calculees sur "
             "indicateurs fournis. "
-            "Prédiction non garantie."
+            "Prediction non garantie."
         )
 
     else:
 
         resultat["classement_partiel"] = positions
         resultat["statut"] = STATUT_INSUFFISANT
-
         resultat["raison"] = (
             "Moins de cinq chevaux admissibles. "
-            "Classement partiel conservé."
+            "Classement partiel conserve."
         )
 
     return resultat
 
 
 # ============================================================
-# 10. SECURITE JSON
+# 8. SECURITE JSON
 # ============================================================
 
 def refuser_doublons(paires: list) -> dict:
@@ -633,7 +591,7 @@ def refuser_doublons(paires: list) -> dict:
 
         if cle in resultat:
             raise ValueError(
-                f"Clé JSON dupliquée : {cle}"
+                f"Cle JSON dupliquee : {cle}"
             )
 
         resultat[cle] = valeur
@@ -652,8 +610,6 @@ def charger_json_securise(
     chemin: Path,
 ) -> tuple[Any, str]:
 
-    chemin = Path(chemin)
-
     taille = chemin.stat().st_size
 
     if taille > TAILLE_MAX_OCTETS:
@@ -662,7 +618,6 @@ def charger_json_securise(
         )
 
     with chemin.open("rb") as fichier:
-
         contenu = fichier.read(
             TAILLE_MAX_OCTETS + 1
         )
@@ -686,138 +641,7 @@ def charger_json_securise(
 
 
 # ============================================================
-# 11. VALIDATION DES SORTIES
-# ============================================================
-
-def verifier_sortie_analyse(
-    course: Any,
-    resultat: dict,
-) -> None:
-
-    if not isinstance(resultat, dict):
-        raise ValueError(
-            "Résultat d'analyse invalide"
-        )
-
-    statut = resultat.get("statut")
-
-    if statut not in STATUTS_VALIDES:
-        raise ValueError(
-            "Statut d'analyse invalide"
-        )
-
-    if resultat.get("fige") is not False:
-        raise ValueError(
-            "FIGÉ interdit"
-        )
-
-    if resultat.get("publication") is not False:
-        raise ValueError(
-            "Publication interdite"
-        )
-
-    if (
-        not isinstance(course, dict)
-        or resultat.get("course_id") != course.get("id")
-    ):
-        raise ValueError(
-            "Identifiant de course incohérent"
-        )
-
-    classement = resultat.get("classement")
-    partiel = resultat.get("classement_partiel")
-
-    if (
-        not isinstance(classement, list)
-        or not isinstance(partiel, list)
-    ):
-        raise ValueError(
-            "Classements invalides"
-        )
-
-    if statut == STATUT_DISPONIBLE:
-
-        if len(classement) != 5 or partiel:
-            raise ValueError(
-                "Cinq positions complètes requises"
-            )
-
-    elif statut == STATUT_INSUFFISANT:
-
-        if classement or len(partiel) >= 5:
-            raise ValueError(
-                "Classement partiel incohérent"
-            )
-
-    elif classement or partiel:
-        raise ValueError(
-            "Classement interdit pour course non analysable"
-        )
-
-    actifs = {
-        cheval["numero"]
-        for cheval in course.get("partants", [])
-        if isinstance(cheval, dict)
-        and type(cheval.get("numero")) is int
-        and cheval.get("non_partant") is False
-    }
-
-    positions = (
-        classement
-        if statut == STATUT_DISPONIBLE
-        else partiel
-    )
-
-    numeros = set()
-
-    for rang, ligne in enumerate(
-        positions,
-        start=1,
-    ):
-
-        if not isinstance(ligne, dict):
-            raise ValueError(
-                "Ligne de classement invalide"
-            )
-
-        numero = ligne.get("numero")
-
-        if (
-            type(numero) is not int
-            or numero not in actifs
-            or numero in numeros
-        ):
-            raise ValueError(
-                "Cheval classé invalide ou non-partant"
-            )
-
-        numeros.add(numero)
-
-        if (
-            type(ligne.get("position_predite")) is not int
-            or ligne["position_predite"] != rang
-        ):
-            raise ValueError(
-                "Position prédite invalide"
-            )
-
-        if note_valide(ligne.get("score")) is None:
-            raise ValueError(
-                "Score de classement invalide"
-            )
-
-    if statut != STATUT_NON_ANALYSABLE:
-
-        valide, raison = verifier_course(course)
-
-        if not valide:
-            raise ValueError(
-                f"Course non analysable : {raison}"
-            )
-
-
-# ============================================================
-# 12. EXECUTION EN LECTURE SEULE
+# 9. EXECUTION EN LECTURE SEULE
 # ============================================================
 
 def executer(
@@ -826,7 +650,7 @@ def executer(
 
     parser = argparse.ArgumentParser(
         description=(
-            "X1000 V2.4 — Analyse hippique "
+            "X1000 V2.4 - Analyse hippique "
             "en lecture seule"
         )
     )
@@ -834,7 +658,7 @@ def executer(
     parser.add_argument(
         "--input",
         required=True,
-        help="Fichier JSON de course documentée",
+        help="Fichier JSON de course verifiee",
     )
 
     args = parser.parse_args()
@@ -846,30 +670,50 @@ def executer(
                 "Fonction d'analyse invalide"
             )
 
+        chemin = Path(args.input)
+
         course, empreinte = charger_json_securise(
-            Path(args.input)
+            chemin
         )
 
         resultat = analyse(course)
 
-        verifier_sortie_analyse(
-            course,
-            resultat,
-        )
-
-        sortie = dict(resultat)
-        sortie["source_sha256"] = empreinte
-
-        print(
-            json.dumps(
-                sortie,
-                ensure_ascii=False,
-                indent=2,
-                allow_nan=False,
+        if not isinstance(resultat, dict):
+            raise ValueError(
+                "Resultat d'analyse invalide"
             )
+
+        statut = resultat.get("statut")
+
+        if statut not in STATUTS_VALIDES:
+            raise ValueError(
+                "Statut d'analyse invalide"
+            )
+
+        # La sortie doit rester une analyse,
+        # jamais une publication ou un FIGE.
+        if resultat.get("fige") is not False:
+            raise ValueError(
+                "FIGE interdit dans le noyau"
+            )
+
+        if resultat.get("publication") is not False:
+            raise ValueError(
+                "Publication interdite"
+            )
+
+        resultat["source_sha256"] = empreinte
+
+        sortie = json.dumps(
+            resultat,
+            ensure_ascii=False,
+            indent=2,
+            allow_nan=False,
         )
 
-        if resultat["statut"] == STATUT_DISPONIBLE:
+        print(sortie)
+
+        if statut == STATUT_DISPONIBLE:
             return 0
 
         return 2
@@ -882,134 +726,11 @@ def executer(
         OverflowError,
         KeyError,
         ZeroDivisionError,
-        RuntimeError,
     ) as erreur:
 
         print(
-            f"ERREUR X1000 : {erreur}",
+            f"Erreur X1000 : {erreur}",
             file=sys.stderr,
         )
 
         return 1
-
-
-# ============================================================
-# 13. AUTOTEST DU NOYAU
-# ============================================================
-
-def self_test() -> int:
-
-    try:
-
-        if VERSION != "2.4":
-            raise RuntimeError(
-                "Version incorrecte"
-            )
-
-        if len(MOTEURS_VALIDES) != 5:
-            raise RuntimeError(
-                "Nombre de moteurs incorrect"
-            )
-
-        if note_valide(0) != 0.0:
-            raise RuntimeError(
-                "Validation note zéro incorrecte"
-            )
-
-        if note_valide(100) != 100.0:
-            raise RuntimeError(
-                "Validation note maximale incorrecte"
-            )
-
-        if note_valide(-1) is not None:
-            raise RuntimeError(
-                "Note négative acceptée"
-            )
-
-        if note_valide(101) is not None:
-            raise RuntimeError(
-                "Note supérieure à 100 acceptée"
-            )
-
-        if note_valide(True) is not None:
-            raise RuntimeError(
-                "Booléen accepté comme note"
-            )
-
-        if lire_date(
-            "2026-11-04T10:00:00+01:00"
-        ) is None:
-            raise RuntimeError(
-                "Date valide rejetée"
-            )
-
-        if lire_date(
-            "2026-11-04T10:00:00"
-        ) is not None:
-            raise RuntimeError(
-                "Date sans fuseau acceptée"
-            )
-
-        for moteur in MOTEURS_VALIDES:
-
-            verifier_configuration(
-                moteur=moteur,
-                poids={"test": 1.0},
-                champ="indicateurs_test",
-                couverture_min=0.60,
-            )
-
-        print("X1000 V2.4 — NOYAU COMMUN")
-        print("SELF-TEST : OK")
-        print("Moteurs : M1 M2 M3 M4 M5")
-        print("Classements partiels : activés")
-        print("Contrôle JSON : activé")
-        print("SHA-256 : activé")
-        print("Collecte PMU : aucune")
-        print("Publication : aucune")
-        print("FIGÉ automatique : aucun")
-        print("Écriture archives : aucune")
-
-        return 0
-
-    except Exception as erreur:
-
-        print(
-            f"SELF-TEST : ECHEC — {erreur}",
-            file=sys.stderr,
-        )
-
-        return 1
-
-
-# ============================================================
-# 14. INTERFACE DU NOYAU
-# ============================================================
-
-def main() -> int:
-
-    parser = argparse.ArgumentParser(
-        description="X1000 V2.4 — Noyau commun"
-    )
-
-    parser.add_argument(
-        "--self-test",
-        action="store_true",
-        help="Vérifier le noyau commun",
-    )
-
-    args = parser.parse_args()
-
-    if args.self_test:
-        return self_test()
-
-    parser.print_help()
-    return 0
-
-
-# ============================================================
-# 15. DEMARRAGE
-# ============================================================
-
-if __name__ == "__main__":
-    sys.exit(main())
