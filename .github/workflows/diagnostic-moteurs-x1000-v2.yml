@@ -13,8 +13,12 @@ on:
       - "m1.py "
       - "m2.py "
       - "m3.py "
+      - "m4.py "
+      - "m5.py "
+      - "moteurs/**"
       - "noyau_commun.py"
       - "verification_moteurs.py"
+      - "restaurer_moteurs.sh"
       - ".github/workflows/diagnostic-moteurs-x1000-v2.yml"
 
 permissions:
@@ -33,10 +37,12 @@ jobs:
           persist-credentials: false
 
       - name: Installer Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
       - name: Executer le diagnostic
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
-          python verification_moteurs.py
+          python -B verification_moteurs.py
