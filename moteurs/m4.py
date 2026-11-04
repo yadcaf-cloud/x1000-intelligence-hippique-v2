@@ -6,15 +6,15 @@ X1000 V2.4 - M4 : TACTIQUE ET SCENARIOS
 
 Moteur sportif independant M4.
 
-- Courses PMU physiquement disputees en France.
-- Depart verifie et non encore passe.
+- Analyse des courses PMU en France.
+- Validation technique par le noyau commun.
 - Analyse des partants actifs uniquement.
 - Six criteres tactiques independants.
-- Donnees documentees et verifiees en amont.
 - Cinq positions predites si possible.
 - Classement partiel si donnees insuffisantes.
 - Detection des risques tactiques.
 - Aucune donnee sportive inventee.
+- Aucune collecte PMU.
 - Aucun FIGE automatique ou retroactif.
 - Aucune publication.
 - Aucune modification des archives.
@@ -25,18 +25,27 @@ Execution en lecture seule :
 
 from __future__ import annotations
 
-import argparse
-import json
 import math
 import sys
-
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 
 # ============================================================
-# 1. IDENTITE ET CONFIGURATION
+# 1. IMPORT DU NOYAU COMMUN
+# ============================================================
+
+if __package__:
+    from . import noyau_commun
+else:
+    import noyau_commun
+
+
+analyse_commune = noyau_commun.analyser_course
+execution_commune = noyau_commun.executer
+
+
+# ============================================================
+# 2. IDENTITE ET CONFIGURATION M4
 # ============================================================
 
 MOTEUR = "M4"
@@ -64,80 +73,76 @@ LIBELLES_RISQUES = {
     "fiabilite_tactique": "Fiabilite tactique faible",
 }
 
-
-# ============================================================
-# 2. HORODATAGE
-# ============================================================
-
-def maintenant() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def lire_date(valeur: Any) -> datetime | None:
-    if not isinstance(valeur, str) or not valeur.strip():
-        return None
-
-    try:
-        date = datetime.fromisoformat(
-            valeur.strip().replace("Z", "+00:00")
-        )
-
-        if date.utcoffset() is None:
-            return None
-
-        return date.astimezone(timezone.utc)
-
-    except (ValueError, TypeError, OverflowError):
-        return None
+STATUTS_ATTENDUS = frozenset({
+    "ANALYSE_DISPONIBLE",
+    "DONNEES_INSUFFISANTES",
+    "NON_ANALYSABLE",
+})
 
 
 # ============================================================
-# 3. VALIDATION DES NOTES
-# ============================================================
-
-def note_valide(valeur: Any) -> float | None:
-    """
-    Accepte uniquement les notes numeriques
-    comprises entre 0 et 100.
-    """
-
-    if type(valeur) not in (int, float):
-        return None
-
-    try:
-        if not math.isfinite(valeur):
-            return None
-
-        if not 0 <= valeur <= 100:
-            return None
-
-        return float(valeur)
-
-    except (OverflowError, ValueError):
-        return None
-
-
-# ============================================================
-# 4. VALIDATION DE LA CONFIGURATION
+# 3. VERIFICATION DE LA CONFIGURATION
 # ============================================================
 
 def verifier_configuration() -> None:
-    if not POIDS:
-        raise RuntimeError("Ponderations M4 absentes")
+    """Controle la configuration et le noyau commun."""
+
+    version_noyau = getattr(
+        noyau_commun,
+        "VERSION",
+        None,
+    )
+
+    if version_noyau != VERSION:
+        raise RuntimeError(
+            "Version du noyau incompatible : "
+            f"M4={VERSION}, noyau={version_noyau}"
+        )
+
+    if not callable(analyse_commune):
+        raise RuntimeError(
+            "Analyse commune indisponible"
+        )
+
+    if not callable(execution_commune):
+        raise RuntimeError(
+            "Execution commune indisponible"
+        )
+
+    if (
+        not isinstance(CHAMP, str)
+        or not CHAMP.strip()
+    ):
+        raise RuntimeError(
+            "Champ M4 invalide"
+        )
+
+    if not isinstance(POIDS, dict) or not POIDS:
+        raise RuntimeError(
+            "Ponderations M4 absentes"
+        )
 
     for critere, poids in POIDS.items():
-        if not isinstance(critere, str) or not critere:
-            raise RuntimeError("Critere M4 invalide")
+
+        if (
+            not isinstance(critere, str)
+            or not critere.strip()
+        ):
+            raise RuntimeError(
+                "Critere M4 invalide"
+            )
 
         if (
             type(poids) not in (int, float)
             or not math.isfinite(poids)
             or poids <= 0
         ):
-            raise RuntimeError("Poids M4 invalide")
+            raise RuntimeError(
+                f"Poids M4 invalide : {critere}"
+            )
 
     if not math.isclose(
-        sum(POIDS.values()),
+        math.fsum(POIDS.values()),
         1.0,
         rel_tol=0.0,
         abs_tol=1e-9,
@@ -146,395 +151,485 @@ def verifier_configuration() -> None:
             "La somme des poids M4 doit etre egale a 1"
         )
 
-    if not 0 < COUVERTURE_MIN <= 1:
+    if (
+        type(COUVERTURE_MIN) not in (int, float)
+        or not math.isfinite(COUVERTURE_MIN)
+        or not 0 < COUVERTURE_MIN <= 1
+    ):
         raise RuntimeError(
-            "Seuil de couverture invalide"
+            "Seuil de couverture M4 invalide"
+        )
+
+    if (
+        type(SEUIL_RISQUE) not in (int, float)
+        or not math.isfinite(SEUIL_RISQUE)
+        or not 0 <= SEUIL_RISQUE <= 100
+    ):
+        raise RuntimeError(
+            "Seuil de risque M4 invalide"
+        )
+
+    if set(LIBELLES_RISQUES) != set(POIDS):
+        raise RuntimeError(
+            "Criteres de risques M4 incoherents"
+        )
+
+    statuts_noyau = getattr(
+        noyau_commun,
+        "STATUTS_VALIDES",
+        None,
+    )
+
+    if (
+        not isinstance(
+            statuts_noyau,
+            (set, frozenset, tuple, list),
+        )
+        or set(statuts_noyau) != STATUTS_ATTENDUS
+    ):
+        raise RuntimeError(
+            "Statuts du noyau incompatibles"
         )
 
 
-# ============================================================
-# 5. VALIDATION SECURISEE DE LA COURSE
-# ============================================================
+def verifier_noyau() -> None:
+    """Alias de compatibilite."""
 
-def verifier_course(course: Any) -> tuple[bool, str]:
-    if not isinstance(course, dict):
-        return False, "Format de course invalide"
-
-    if course.get("localisation_france_verifiee") is not True:
-        return False, "Localisation France non verifiee"
-
-    if course.get("depart_verifie") is not True:
-        return False, "Depart non verifie"
-
-    depart = lire_date(course.get("depart"))
-
-    if depart is None:
-        return False, "Date de depart ou fuseau invalide"
-
-    if depart <= datetime.now(timezone.utc):
-        return False, "Depart deja passe"
-
-    partants = course.get("partants")
-
-    if not isinstance(partants, list):
-        return False, "Liste des partants invalide"
-
-    numeros = set()
-    actifs = 0
-
-    for cheval in partants:
-        if not isinstance(cheval, dict):
-            return False, "Structure de cheval invalide"
-
-        numero = cheval.get("numero")
-        nom = cheval.get("nom")
-        non_partant = cheval.get("non_partant")
-
-        if type(numero) is not int or numero <= 0:
-            return False, "Numero de cheval invalide"
-
-        if numero in numeros:
-            return False, "Numero de cheval en double"
-
-        numeros.add(numero)
-
-        if not isinstance(nom, str) or not nom.strip():
-            return False, "Nom de cheval invalide"
-
-        if type(non_partant) is not bool:
-            return False, "Statut non-partant invalide"
-
-        if not non_partant:
-            actifs += 1
-
-    if actifs == 0:
-        return False, "Aucun partant actif"
-
-    return True, "Course techniquement admissible"
+    verifier_configuration()
 
 
 # ============================================================
-# 6. ANALYSE INDIVIDUELLE DU CHEVAL
+# 4. VALIDATION DES NOTES
 # ============================================================
 
-def analyser_cheval(cheval: dict) -> dict:
-    indicateurs = cheval.get(CHAMP)
+def note_valide(valeur: Any) -> float | None:
+    """Accepte uniquement les notes de 0 a 100."""
 
-    if not isinstance(indicateurs, dict):
-        indicateurs = {}
+    if type(valeur) not in (int, float):
+        return None
 
-    total = 0.0
-    couverture = 0.0
-    criteres = {}
-    manquants = []
+    try:
+        valeur = float(valeur)
+    except (
+        ValueError,
+        TypeError,
+        OverflowError,
+    ):
+        return None
 
-    for critere, poids in POIDS.items():
-        valeur = note_valide(
-            indicateurs.get(critere)
-        )
+    if not math.isfinite(valeur):
+        return None
 
-        if valeur is None:
-            manquants.append(critere)
-            continue
+    if not 0 <= valeur <= 100:
+        return None
 
-        criteres[critere] = valeur
-        total += valeur * poids
-        couverture += poids
+    return valeur
 
-    couverture = round(couverture, 4)
 
-    score = None
+# ============================================================
+# 5. IDENTIFICATION DES RISQUES TACTIQUES
+# ============================================================
 
-    if couverture + 1e-9 >= COUVERTURE_MIN:
-        score = round(
-            total / couverture,
-            2,
-        )
+def identifier_risques(
+    criteres: dict,
+) -> list[str]:
+    """
+    Signale les fragilites tactiques documentees.
+
+    Une donnee absente ne devient pas
+    automatiquement un risque.
+    """
 
     risques = []
 
     for critere, libelle in LIBELLES_RISQUES.items():
-        valeur = criteres.get(critere)
 
-        if valeur is not None and valeur < SEUIL_RISQUE:
+        valeur = note_valide(
+            criteres.get(critere)
+        )
+
+        if (
+            valeur is not None
+            and valeur < SEUIL_RISQUE
+        ):
             risques.append(libelle)
 
-    return {
-        "numero": cheval["numero"],
-        "nom": cheval["nom"],
-        "score": score,
-        "score_m4": score,
-        "couverture": couverture,
-        "criteres": criteres,
-        "criteres_manquants": manquants,
-        "admissible": score is not None,
-        "risques": risques,
+    return risques
+
+
+# ============================================================
+# 6. VALIDATION DU RESULTAT COMMUN
+# ============================================================
+
+def verifier_resultat(
+    resultat: Any,
+) -> None:
+    """Refuse les sorties incompatibles du noyau."""
+
+    if not isinstance(resultat, dict):
+        raise RuntimeError(
+            "Resultat M4 non conforme"
+        )
+
+    if resultat.get("moteur") != MOTEUR:
+        raise RuntimeError(
+            "Identite du moteur incoherente"
+        )
+
+    if resultat.get("statut") not in STATUTS_ATTENDUS:
+        raise RuntimeError(
+            "Statut M4 invalide"
+        )
+
+    if resultat.get("fige") is not False:
+        raise RuntimeError(
+            "FIGE interdit dans M4"
+        )
+
+    if resultat.get("publication") is not False:
+        raise RuntimeError(
+            "Publication interdite dans M4"
+        )
+
+    for cle in (
+        "chevaux_analyses",
+        "classement",
+        "classement_partiel",
+    ):
+
+        if not isinstance(
+            resultat.get(cle),
+            list,
+        ):
+            raise RuntimeError(
+                f"Champ M4 invalide : {cle}"
+            )
+
+        for entree in resultat[cle]:
+
+            if not isinstance(entree, dict):
+                raise RuntimeError(
+                    f"Entree M4 invalide : {cle}"
+                )
+
+    classement = resultat["classement"]
+    partiel = resultat["classement_partiel"]
+    statut = resultat["statut"]
+
+    if statut == "ANALYSE_DISPONIBLE":
+
+        if len(classement) != 5 or partiel:
+            raise RuntimeError(
+                "Cinq positions M4 obligatoires"
+            )
+
+    elif statut == "DONNEES_INSUFFISANTES":
+
+        if classement or len(partiel) >= 5:
+            raise RuntimeError(
+                "Classement partiel M4 incoherent"
+            )
+
+    elif classement or partiel:
+        raise RuntimeError(
+            "Classement interdit pour "
+            "une course non analysable"
+        )
+
+    numeros_analyses = set()
+
+    for analyse in resultat["chevaux_analyses"]:
+
+        numero = analyse.get("numero")
+
+        if (
+            type(numero) is not int
+            or numero <= 0
+            or numero in numeros_analyses
+        ):
+            raise RuntimeError(
+                "Numero analyse M4 invalide"
+            )
+
+        numeros_analyses.add(numero)
+
+        score = analyse.get("score")
+
+        if (
+            score is not None
+            and note_valide(score) is None
+        ):
+            raise RuntimeError(
+                "Score analyse M4 invalide"
+            )
+
+    for cle in (
+        "classement",
+        "classement_partiel",
+    ):
+
+        numeros_classes = set()
+
+        for rang, position in enumerate(
+            resultat[cle],
+            start=1,
+        ):
+
+            numero = position.get("numero")
+
+            if (
+                type(numero) is not int
+                or numero not in numeros_analyses
+                or numero in numeros_classes
+            ):
+                raise RuntimeError(
+                    "Classement M4 incoherent"
+                )
+
+            numeros_classes.add(numero)
+
+            if (
+                type(position.get("position_predite"))
+                is not int
+                or position["position_predite"] != rang
+            ):
+                raise RuntimeError(
+                    "Position predite M4 invalide"
+                )
+
+            if note_valide(
+                position.get("score")
+            ) is None:
+                raise RuntimeError(
+                    "Score de classement M4 invalide"
+                )
+
+
+# ============================================================
+# 7. ENRICHISSEMENT DES ANALYSES
+# ============================================================
+
+def enrichir_analyses(
+    resultat: dict,
+) -> None:
+    """
+    Ajoute les risques propres a M4.
+
+    Les scores restent ceux du noyau commun.
+    Aucun score n'est recalcule ou invente.
+    """
+
+    risques_tactiques = []
+
+    for analyse in resultat["chevaux_analyses"]:
+
+        criteres = analyse.get("criteres")
+
+        if not isinstance(criteres, dict):
+            raise RuntimeError(
+                "Criteres M4 invalides"
+            )
+
+        risques = identifier_risques(
+            criteres
+        )
+
+        analyse["score_m4"] = analyse.get("score")
+        analyse["risques"] = risques
+
+        if risques:
+            risques_tactiques.append({
+                "numero": analyse["numero"],
+                "nom": analyse["nom"],
+                "risques": list(risques),
+            })
+
+    resultat["risques_tactiques"] = risques_tactiques
+    resultat["alertes_risques"] = [
+        dict(entree)
+        for entree in risques_tactiques
+    ]
+
+
+# ============================================================
+# 8. ENRICHISSEMENT DU CLASSEMENT
+# ============================================================
+
+def enrichir_classement(
+    resultat: dict,
+) -> None:
+    """Ajoute les informations tactiques au classement."""
+
+    analyses = {
+        analyse["numero"]: analyse
+        for analyse in resultat["chevaux_analyses"]
     }
 
+    scores = [
+        analyse["score"]
+        for analyse in analyses.values()
+        if analyse.get("score") is not None
+    ]
+
+    for cle in (
+        "classement",
+        "classement_partiel",
+    ):
+
+        for position in resultat[cle]:
+
+            numero = position["numero"]
+            analyse = analyses[numero]
+
+            score = position["score"]
+
+            egalite = sum(
+                autre_score == score
+                for autre_score in scores
+            ) > 1
+
+            position["score_m4"] = score
+            position["risques"] = list(
+                analyse["risques"]
+            )
+            position["egalite_score"] = egalite
+
 
 # ============================================================
-# 7. ANALYSE SPORTIVE INDEPENDANTE M4
+# 9. ANALYSE SPORTIVE INDEPENDANTE M4
 # ============================================================
 
-def analyser_course(course: Any) -> dict:
+def analyser_course(
+    course: Any,
+) -> dict:
     """
-    Analyse tactique independante.
+    Analyse tactique M4.
 
-    Aucun classement invente.
-    Les chevaux insuffisamment documentes
-    restent visibles dans les analyses.
+    Le noyau commun assure les validations
+    techniques et calcule les scores M4
+    avec les six ponderations propres au moteur.
+
+    M4 ajoute ses alertes tactiques sans
+    modifier les scores ni les positions.
     """
 
     verifier_configuration()
 
-    valide, raison = verifier_course(course)
+    resultat = analyse_commune(
+        course=course,
+        moteur=MOTEUR,
+        poids=POIDS,
+        champ=CHAMP,
+        couverture_min=COUVERTURE_MIN,
+    )
 
-    resultat = {
-        "moteur": MOTEUR,
-        "version": VERSION,
-        "champ": CHAMP,
-        "analyse_a": maintenant(),
-        "course_id": (
-            course.get("id")
-            if isinstance(course, dict)
-            else None
-        ),
-        "statut": "NON_ANALYSABLE",
-        "raison": raison,
-        "nombre_partants_actifs": 0,
-        "nombre_chevaux_admissibles": 0,
-        "classement": [],
-        "classement_partiel": [],
-        "chevaux_analyses": [],
-        "alertes_risques": [],
-        "risques_tactiques": [],
-        "fige": False,
-        "publication": False,
-    }
+    verifier_resultat(resultat)
 
-    if not valide:
+    resultat["risques_tactiques"] = []
+    resultat["alertes_risques"] = []
+
+    if resultat["statut"] == "NON_ANALYSABLE":
         return resultat
 
-    actifs = [
-        cheval
-        for cheval in course["partants"]
-        if not cheval["non_partant"]
-    ]
+    enrichir_analyses(resultat)
+    enrichir_classement(resultat)
 
-    resultat["nombre_partants_actifs"] = len(actifs)
-
-    analyses = [
-        analyser_cheval(cheval)
-        for cheval in actifs
-    ]
-
-    resultat["chevaux_analyses"] = analyses
-
-    risques_tactiques = []
-
-    for analyse in analyses:
-        if analyse["risques"]:
-            risques_tactiques.append({
-                "numero": analyse["numero"],
-                "nom": analyse["nom"],
-                "risques": list(analyse["risques"]),
-            })
-
-    resultat["risques_tactiques"] = risques_tactiques
-    resultat["alertes_risques"] = list(
-        risques_tactiques
+    resultat["nombre_partants_actifs"] = len(
+        resultat["chevaux_analyses"]
     )
 
-    admissibles = [
-        cheval
-        for cheval in analyses
-        if cheval["admissible"]
-    ]
-
-    resultat["nombre_chevaux_admissibles"] = len(
-        admissibles
+    resultat["nombre_chevaux_admissibles"] = sum(
+        analyse.get("score") is not None
+        for analyse in resultat["chevaux_analyses"]
     )
 
-    if not admissibles:
-        resultat["raison"] = (
-            "Aucun cheval avec une couverture "
-            "tactique suffisante"
-        )
-        return resultat
-
-    # Classement sportif M4 independant.
-    # Departage technique reproductible.
-    # Les egalites de score sont signalees.
-
-    admissibles.sort(
-        key=lambda cheval: (
-            -cheval["score_m4"],
-            -cheval["couverture"],
-            cheval["numero"],
-        )
-    )
-
-    classement = []
-
-    for rang, cheval in enumerate(
-        admissibles[:5],
-        start=1,
-    ):
-        egalite = sum(
-            autre["score_m4"] == cheval["score_m4"]
-            for autre in admissibles
-        ) > 1
-
-        classement.append({
-            "position_predite": rang,
-            "numero": cheval["numero"],
-            "nom": cheval["nom"],
-            "score": cheval["score"],
-            "score_m4": cheval["score_m4"],
-            "couverture": cheval["couverture"],
-            "risques": list(cheval["risques"]),
-            "egalite_score": egalite,
-        })
-
-    if len(classement) == 5:
-        resultat["classement"] = classement
-        resultat["statut"] = "ANALYSE_DISPONIBLE"
-        resultat["raison"] = (
-            "Cinq positions tactiques disponibles. "
-            "Prediction non garantie."
-        )
-
-    else:
-        resultat["classement_partiel"] = classement
-        resultat["statut"] = "ANALYSE_PARTIELLE"
-        resultat["raison"] = (
-            "Classement partiel : moins de "
-            "cinq chevaux admissibles"
-        )
+    verifier_resultat(resultat)
 
     return resultat
 
 
 # ============================================================
-# 8. INTERFACE COORDINATEUR X1000
+# 10. INTERFACE COORDINATEUR X1000
 # ============================================================
 
-def analyser_course_m4(course: Any) -> dict:
+def analyser_course_m4(
+    course: Any,
+) -> dict:
+    """Point d'entree explicite du moteur M4."""
+
     return analyser_course(course)
 
 
 class MoteurM4:
-    """
-    Moteur tactique independant M4.
-    """
+    """Moteur tactique independant M4."""
 
     nom = MOTEUR
     version = VERSION
 
-    def analyser(self, course: Any) -> dict:
+    def analyser(
+        self,
+        course: Any,
+    ) -> dict:
         return analyser_course(course)
 
 
 # ============================================================
-# 9. SECURITE DU JSON
-# ============================================================
-
-def _sans_doublons(
-    paires: list[tuple[str, Any]],
-) -> dict:
-    resultat = {}
-
-    for cle, valeur in paires:
-        if cle in resultat:
-            raise ValueError(
-                f"Cle JSON en double : {cle}"
-            )
-
-        resultat[cle] = valeur
-
-    return resultat
-
-
-def _constante_interdite(valeur: str) -> None:
-    raise ValueError(
-        f"Constante JSON interdite : {valeur}"
-    )
-
-
-# ============================================================
-# 10. EXECUTION EN LECTURE SEULE
+# 11. EXECUTION EN LECTURE SEULE
 # ============================================================
 
 def executer(
-    fonction_analyse=analyser_course,
+    fonction_analyse=None,
 ) -> int:
-    parser = argparse.ArgumentParser(
-        description="X1000 V2.4 - Moteur M4"
-    )
+    """Interface historique compatible."""
 
-    parser.add_argument(
-        "--input",
-        required=True,
-        help="Fichier JSON de course",
-    )
+    verifier_configuration()
 
-    args = parser.parse_args()
+    if fonction_analyse is None:
+        fonction_analyse = analyser_course
 
-    try:
-        chemin = Path(args.input)
-
-        with chemin.open(
-            "r",
-            encoding="utf-8",
-        ) as fichier:
-            course = json.load(
-                fichier,
-                object_pairs_hook=_sans_doublons,
-                parse_constant=_constante_interdite,
-            )
-
-        resultat = fonction_analyse(course)
-
-        print(
-            json.dumps(
-                resultat,
-                ensure_ascii=False,
-                indent=2,
-                allow_nan=False,
-            )
+    if not callable(fonction_analyse):
+        raise TypeError(
+            "Fonction d'analyse M4 invalide"
         )
 
-        if resultat["statut"] == "ANALYSE_DISPONIBLE":
-            return 0
+    return execution_commune(
+        fonction_analyse
+    )
 
-        if resultat["statut"] in (
-            "ANALYSE_PARTIELLE",
-            "NON_ANALYSABLE",
-        ):
-            return 2
 
-        return 1
+def main() -> int:
+    """
+    Execution :
+        python -m moteurs.m4 --input course.json
+
+    Codes de sortie :
+        0 : analyse disponible
+        2 : donnees insuffisantes ou non analysable
+        1 : erreur technique
+    """
+
+    try:
+        return executer(
+            analyser_course
+        )
 
     except (
-        OSError,
+        RuntimeError,
         ValueError,
         TypeError,
-        RuntimeError,
         OverflowError,
     ) as erreur:
+
         print(
             f"Erreur M4 : {erreur}",
             file=sys.stderr,
         )
+
         return 1
 
 
-def main() -> int:
-    return executer(analyser_course)
-
-
 # ============================================================
-# 11. DEMARRAGE
+# 12. DEMARRAGE
 # ============================================================
 
 if __name__ == "__main__":
