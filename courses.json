@@ -1,0 +1,69 @@
+{
+  "courses": [
+    {
+      "id": "2026-11-04-R1-C2",
+      "date": "2026-11-04",
+      "pays": "France",
+      "hippodrome": "Nantes",
+      "depart": "2026-11-04T13:55:00+01:00",
+      "partants": [
+        {
+          "numero": 1,
+          "nom": "JERENAL D'HAMELINE"
+        },
+        {
+          "numero": 2,
+          "nom": "IDOLE DE MEAT"
+        },
+        {
+          "numero": 3,
+          "nom": "HAPPY FACE"
+        },
+        {
+          "numero": 4,
+          "nom": "HAPPY DANOVER"
+        },
+        {
+          "numero": 5,
+          "nom": "JANE AIMEE"
+        },
+        {
+          "numero": 6,
+          "nom": "JENTIL DIESCHOOT"
+        },
+        {
+          "numero": 7,
+          "nom": "KARNAC WOOD"
+        },
+        {
+          "numero": 8,
+          "nom": "KELLE BEAUTE"
+        },
+        {
+          "numero": 9,
+          "nom": "HARMONY LA NUIT"
+        },
+        {
+          "numero": 10,
+          "nom": "JE REVE DU BOIS"
+        },
+        {
+          "numero": 11,
+          "nom": "HORATIUS D'ELA"
+        },
+        {
+          "numero": 12,
+          "nom": "IBISCUS MAN"
+        }
+      ],
+      "formules": [
+        "Simple gagnant",
+        "Couplé gagnant",
+        "2sur4",
+        "Tiercé",
+        "Quinté+"
+      ],
+      "source": "https://www.canalturf.com/pronostics-PMU/2026-11-04/nantes/422532_12eme-etape-du-grand-national-du-trot.html"
+    }
+  ]
+}
