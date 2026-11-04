@@ -3,8 +3,8 @@
 
 """X1000 Intelligence Hippique V2 — diagnostic statique M1 à M5.
 
-Aucun module moteur n'est importé ou exécuté.
-Aucun fichier n'est modifié.
+Lecture seule : aucun import ni exécution des moteurs, aucune écriture.
+La validation statique ne démontre pas le fonctionnement sportif.
 """
 
 from __future__ import annotations
@@ -12,21 +12,21 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+import sys
 
 
 RACINE = Path(__file__).resolve().parent
+MOTEURS = tuple(f"M{i}" for i in range(1, 6))
+DOSSIERS = (RACINE / "moteurs", RACINE)
 
-MOTEURS = tuple(
-    f"M{i}" for i in range(1, 6)
+INTERFACES_POSSIBLES = (
+    "analyser_course",
+    "analyser",
+    "analyser_partants",
 )
 
-DOSSIERS = (
-    RACINE / "moteurs",
-    RACINE,
-)
 
-
-def candidats(nom: str) -> list[Path]:
+def chemins_candidats(nom: str) -> list[Path]:
     """Recherche les emplacements et noms possibles."""
 
     base = nom.lower() + ".py"
@@ -34,15 +34,33 @@ def candidats(nom: str) -> list[Path]:
     return [
         dossier / variante
         for dossier in DOSSIERS
-        for variante in (
-            base,
-            base + " ",
-        )
+        for variante in (base, base + " ")
     ]
 
 
+def lire_ast(chemin: Path) -> ast.Module:
+    """Lit et analyse un fichier Python sans l'exécuter."""
+
+    return ast.parse(
+        chemin.read_text(encoding="utf-8-sig"),
+        filename=str(chemin),
+    )
+
+
+def chemins_noyau(fichier: Path) -> list[Path]:
+    """Localise les noyaux communs possibles."""
+
+    chemins = [
+        fichier.parent / "noyau_commun.py",
+        RACINE / "moteurs" / "noyau_commun.py",
+        RACINE / "noyau_commun.py",
+    ]
+
+    return list(dict.fromkeys(chemins))
+
+
 def verifier_moteur(nom: str) -> dict:
-    """Vérifie statiquement un moteur sans l'exécuter."""
+    """Vérifie statiquement un moteur M1 à M5."""
 
     resultat = {
         "moteur": nom,
@@ -50,42 +68,47 @@ def verifier_moteur(nom: str) -> dict:
         "nom_fichier_correct": False,
         "chemin": None,
         "syntaxe_valide": False,
-        "fonction_analyser_course_presente": False,
+        "interfaces_detectees": [],
         "dependances_presentes": None,
         "analyse_executee": False,
         "etat": "INDISPONIBLE",
         "anomalies": [],
+        "avertissements": [],
     }
 
-    existants = [
+    if nom not in MOTEURS:
+        resultat["anomalies"].append(
+            "Nom de moteur inconnu"
+        )
+        return resultat
+
+    trouves = [
         chemin
-        for chemin in candidats(nom)
+        for chemin in chemins_candidats(nom)
         if chemin.is_file() or chemin.is_symlink()
     ]
 
-    if not existants:
+    if not trouves:
         resultat["anomalies"].append(
-            "Fichier moteur absent "
-            "(racine et dossier moteurs/)"
+            "Fichier moteur absent"
         )
         return resultat
 
-    if len(existants) != 1:
+    resultat["fichier_present"] = True
+
+    resultat["chemin"] = [
+        str(chemin.relative_to(RACINE))
+        for chemin in trouves
+    ]
+
+    if len(trouves) != 1:
         resultat["anomalies"].append(
-            "Plusieurs fichiers candidats : choix ambigu"
+            "Plusieurs fichiers candidats : emplacement ambigu"
         )
-
-        resultat["chemin"] = [
-            str(chemin.relative_to(RACINE))
-            for chemin in existants
-        ]
-
         resultat["etat"] = "CORRECTION_NECESSAIRE"
         return resultat
 
-    fichier = existants[0]
-
-    resultat["fichier_present"] = True
+    fichier = trouves[0]
 
     resultat["chemin"] = str(
         fichier.relative_to(RACINE)
@@ -104,32 +127,22 @@ def verifier_moteur(nom: str) -> dict:
         resultat["anomalies"].append(
             "Lien symbolique non accepté"
         )
-
         resultat["etat"] = "CORRECTION_NECESSAIRE"
         return resultat
 
     try:
-        source = fichier.read_text(
-            encoding="utf-8-sig"
-        )
-
-        arbre = ast.parse(
-            source,
-            filename=str(fichier)
-        )
+        arbre = lire_ast(fichier)
 
     except (
         OSError,
-        SyntaxError,
         UnicodeError,
+        SyntaxError,
         ValueError,
     ) as erreur:
-
         resultat["anomalies"].append(
             "Lecture ou syntaxe invalide : "
             f"{type(erreur).__name__}: {erreur}"
         )
-
         resultat["etat"] = "CORRECTION_NECESSAIRE"
         return resultat
 
@@ -140,100 +153,122 @@ def verifier_moteur(nom: str) -> dict:
         for noeud in arbre.body
         if isinstance(
             noeud,
-            (
-                ast.FunctionDef,
-                ast.AsyncFunctionDef,
-            )
+            (ast.FunctionDef, ast.AsyncFunctionDef),
         )
     }
 
-    resultat["fonction_analyser_course_presente"] = (
-        "analyser_course" in fonctions
+    resultat["interfaces_detectees"] = sorted(
+        fonctions.intersection(INTERFACES_POSSIBLES)
     )
 
-    if not resultat[
-        "fonction_analyser_course_presente"
-    ]:
-        resultat["anomalies"].append(
-            "Fonction de premier niveau "
-            "analyser_course absente"
+    if not resultat["interfaces_detectees"]:
+        resultat["avertissements"].append(
+            "Aucune interface conventionnelle détectée ; "
+            "contrat réel à vérifier"
         )
 
-    # Vérification ciblée du noyau commun de M1.
-    # Les autres dépendances ne sont pas vérifiées.
-
-    if nom == "M1":
-
-        chemins_noyau = (
-            fichier.parent / "noyau_commun.py",
-            RACINE / "moteurs" / "noyau_commun.py",
-        )
-
-        noyaux = list(
-            dict.fromkeys(chemins_noyau)
-        )
-
-        valides = [
-            chemin
-            for chemin in noyaux
-            if (
-                chemin.is_file()
-                and not chemin.is_symlink()
+    # Détecter les imports statiques du noyau commun.
+    references_noyau = any(
+        (
+            isinstance(noeud, ast.Import)
+            and any(
+                alias.name == "noyau_commun"
+                or alias.name.endswith(".noyau_commun")
+                for alias in noeud.names
             )
+        )
+        or (
+            isinstance(noeud, ast.ImportFrom)
+            and (
+                (
+                    noeud.module is not None
+                    and (
+                        noeud.module == "noyau_commun"
+                        or noeud.module.endswith(
+                            ".noyau_commun"
+                        )
+                    )
+                )
+                or (
+                    noeud.module in (None, "moteurs")
+                    and any(
+                        alias.name == "noyau_commun"
+                        for alias in noeud.names
+                    )
+                )
+            )
+        )
+        for noeud in ast.walk(arbre)
+    )
+
+    if references_noyau:
+        existants = [
+            chemin
+            for chemin in chemins_noyau(fichier)
+            if chemin.is_file() or chemin.is_symlink()
         ]
 
-        if not valides:
+        if not existants:
+            resultat["dependances_presentes"] = False
             resultat["anomalies"].append(
-                "Dépendance noyau_commun.py absente"
+                "noyau_commun.py référencé mais absent"
             )
 
-            resultat["dependances_presentes"] = False
-
         else:
-            noyau_correct = True
+            if len(existants) > 1:
+                resultat["avertissements"].append(
+                    "Plusieurs noyaux communs présents : "
+                    "résolution d'import non garantie"
+                )
 
-            for noyau in valides:
+            erreurs = []
+
+            for noyau in existants:
+                if noyau.is_symlink():
+                    erreurs.append(
+                        "Lien symbolique interdit : "
+                        f"{noyau.relative_to(RACINE)}"
+                    )
+                    continue
 
                 try:
-                    ast.parse(
-                        noyau.read_text(
-                            encoding="utf-8-sig"
-                        ),
-                        filename=str(noyau)
-                    )
+                    lire_ast(noyau)
 
                 except (
                     OSError,
-                    SyntaxError,
                     UnicodeError,
+                    SyntaxError,
                     ValueError,
                 ) as erreur:
-
-                    noyau_correct = False
-
-                    resultat["anomalies"].append(
-                        "Noyau commun invalide : "
+                    erreurs.append(
+                        "Noyau invalide "
+                        f"({noyau.relative_to(RACINE)}) : "
                         f"{erreur}"
                     )
 
             resultat["dependances_presentes"] = (
-                noyau_correct
+                not erreurs
             )
 
-    # Pour M2 à M5, None signifie :
-    # dépendances non évaluées.
+            resultat["anomalies"].extend(erreurs)
+
+    else:
+        resultat["avertissements"].append(
+            "Dépendances non certifiées : "
+            "imports dynamiques et externes non évalués"
+        )
 
     resultat["etat"] = (
-        "STRUCTURE_VALIDEE"
-        if not resultat["anomalies"]
-        else "CORRECTION_NECESSAIRE"
+        "CORRECTION_NECESSAIRE"
+        if resultat["anomalies"]
+        else "STRUCTURE_VALIDEE"
     )
 
     return resultat
 
 
 def main() -> int:
-    """Exécute le diagnostic statique des cinq moteurs."""
+    """Produit le rapport JSON des cinq moteurs."""
 
     resultats = [
         verifier_moteur(nom)
@@ -241,21 +276,20 @@ def main() -> int:
     ]
 
     rapport = {
-        "application": (
-            "X1000 Intelligence Hippique V2"
-        ),
+        "application": "X1000 Intelligence Hippique V2",
         "type": "DIAGNOSTIC_STATIQUE",
         "lecture_seule": True,
         "collecte_pmu": False,
         "publication": False,
         "modification_archives": False,
+        "modification_figes": False,
         "analyses_sportives_executees": False,
         "note": (
-            "STRUCTURE_VALIDEE ne garantit pas "
-            "que le moteur soit opérationnel. "
-            "Les dépendances externes, imports "
-            "dynamiques et résultats sportifs "
-            "ne sont pas vérifiés."
+            "STRUCTURE_VALIDEE signifie uniquement "
+            "qu'aucune anomalie bloquante vérifiée "
+            "n'a été trouvée. Les imports, l'interface "
+            "effective et les performances ne sont "
+            "pas validés."
         ),
         "moteurs": resultats,
     }
@@ -271,12 +305,12 @@ def main() -> int:
     return (
         0
         if all(
-            item["etat"] == "STRUCTURE_VALIDEE"
-            for item in resultats
+            resultat["etat"] == "STRUCTURE_VALIDEE"
+            for resultat in resultats
         )
         else 1
     )
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
