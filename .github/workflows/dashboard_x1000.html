@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#071521">
-<title>🇸🇳 X1000 V2 — Tableau de bord</title>
+<meta name="referrer" content="no-referrer">
+<title>🇸🇳🧠🇫🇷 X1000-intelligence-hippique-v2 — Tableau de bord</title>
 
 <style>
 :root {
@@ -13,104 +14,121 @@
   --panel: #102838;
   --border: #315263;
   --text: #f0f7f5;
-  --gold: #efce7e;
   --muted: #b7cbd0;
+  --gold: #efce7e;
   --green: #82e1b6;
   --red: #ffaaaa;
+  --blue: #a7dfff;
 }
-
 * { box-sizing: border-box; }
-
 body {
-  font: 16px/1.5 system-ui, sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  max-width: 1100px;
   margin: auto;
   padding: 16px;
+  max-width: 1150px;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.55 system-ui, sans-serif;
 }
-
 h1 { color: var(--gold); }
 h2 { margin-top: 0; }
-
 section {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 14px;
   padding: 18px;
   margin: 18px 0;
 }
-
-input {
-  background: var(--bg);
-  color: white;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
-  width: 100%;
-  font-size: 16px;
-}
-
-button {
-  background: var(--gold);
-  color: var(--bg);
-  border: 0;
-  border-radius: 8px;
-  padding: 12px 18px;
-  margin-top: 12px;
-  font-weight: bold;
-  cursor: pointer;
-  width: 100%;
-}
-
-button:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-
-pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-}
-
-small, .muted { color: var(--muted); }
-
 .grid {
   display: grid;
-  grid-template-columns: repeat(
-    auto-fit, minmax(130px, 1fr)
-  );
-  gap: 10px;
+  grid-template-columns:
+    repeat(auto-fit, minmax(135px, 1fr));
+  gap: 12px;
 }
-
-.engine {
+.engine, .counter {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 12px;
+  padding: 14px;
   text-align: center;
 }
-
-.engine strong {
-  color: var(--gold);
+.engine strong, .counter strong {
   display: block;
-  font-size: 20px;
+  color: var(--gold);
+  font-size: 23px;
 }
-
-.engine span {
-  font-size: 12px;
+.engine span, .counter span {
+  display: block;
   color: var(--muted);
+  font-size: 13px;
 }
-
+label {
+  display: block;
+  margin-bottom: 8px;
+}
+input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+button {
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--gold);
+  color: var(--bg);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: .6;
+  cursor: wait;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid var(--blue);
+  outline-offset: 3px;
+}
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.actions button { flex: 1; }
+pre {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 450px;
+  overflow: auto;
+  font-size: 13px;
+}
+.muted, small { color: var(--muted); }
+.good { color: var(--green); }
+.bad { color: var(--red); }
+.warning { color: var(--gold); }
 #state {
-  font-weight: bold;
+  font-weight: 700;
+  overflow-wrap: anywhere;
 }
-
 footer {
   text-align: center;
   color: var(--muted);
-  padding: 20px;
+  padding: 25px;
+}
+@media (max-width: 600px) {
+  body { padding: 10px; }
+  section { padding: 14px; }
+  h1 { font-size: 25px; }
+  .actions { flex-direction: column; }
 }
 </style>
 </head>
@@ -118,309 +136,777 @@ footer {
 <body>
 
 <header>
-<h1>🇸🇳🧠🔥 X1000 Intelligence Hippique V2</h1>
-<p>Courses françaises — M1 à M5 — FIGÉS — Audits</p>
-<p class="muted">
-Mode consultation uniquement.
-Aucune modification des FIGÉS ni des archives.
-</p>
+  <h1>🇸🇳🧠🇫🇷 X1000-intelligence-hippique-v2</h1>
+  <p>
+    Intelligence hippique — Courses françaises —
+    Cinq moteurs indépendants M1 à M5
+  </p>
+  <p class="muted">
+    Consultation sécurisée uniquement.
+    Aucun FIGÉ automatique.
+    Aucune modification des archives.
+    Aucune collecte PMU automatique.
+  </p>
 </header>
 
-<section>
-<h2>🌐 Connexion API</h2>
-
-<label for="api">Adresse HTTPS de l'API</label>
-<input
-  id="api"
-  type="url"
-  placeholder="https://votre-api.example"
-  autocomplete="url"
->
-
-<button id="refresh" type="button">
-🔄 Actualiser les données
-</button>
-
-<p id="state" role="status" aria-live="polite">
-API non configurée
-</p>
-
-<pre id="status">Statut non disponible</pre>
-</section>
+<main>
 
 <section>
-<h2>🧠 Moteurs indépendants</h2>
-
-<div class="grid">
-  <div class="engine">
-    <strong>M1</strong>
-    <span id="m1">Non vérifié</span>
+  <h2>🌐 Connexion API</h2>
+  <label for="api">Adresse HTTPS de l'API</label>
+  <input
+    id="api"
+    type="url"
+    placeholder="https://votre-api.example"
+    autocomplete="url"
+    spellcheck="false"
+  >
+  <div class="actions">
+    <button id="refresh" type="button">
+      🔄 Actualiser les données
+    </button>
+    <button id="tests" type="button">
+      🧪 Tests de sécurité
+    </button>
   </div>
-  <div class="engine">
-    <strong>M2</strong>
-    <span id="m2">Non vérifié</span>
+  <p id="state" role="status" aria-live="polite">
+    API non configurée
+  </p>
+  <small>
+    HTTPS obligatoire, sauf HTTP sur localhost
+    ou 127.0.0.1 pour les essais locaux.
+  </small>
+</section>
+
+<section>
+  <h2>📊 Indicateurs généraux</h2>
+  <div class="grid">
+    <div class="counter">
+      <strong id="count-courses">—</strong>
+      <span>Courses</span>
+    </div>
+    <div class="counter">
+      <strong id="count-selections">—</strong>
+      <span>Sélections</span>
+    </div>
+    <div class="counter">
+      <strong id="count-figes">—</strong>
+      <span>FIGÉS</span>
+    </div>
+    <div class="counter">
+      <strong id="count-audits">—</strong>
+      <span>Audits</span>
+    </div>
   </div>
-  <div class="engine">
-    <strong>M3</strong>
-    <span id="m3">Non vérifié</span>
+</section>
+
+<section>
+  <h2>🧠 Moteurs indépendants M1 à M5</h2>
+  <div class="grid">
+    <div class="engine">
+      <strong>M1</strong>
+      <span id="m1">Non vérifié</span>
+    </div>
+    <div class="engine">
+      <strong>M2</strong>
+      <span id="m2">Non vérifié</span>
+    </div>
+    <div class="engine">
+      <strong>M3</strong>
+      <span id="m3">Non vérifié</span>
+    </div>
+    <div class="engine">
+      <strong>M4</strong>
+      <span id="m4">Non vérifié</span>
+    </div>
+    <div class="engine">
+      <strong>M5</strong>
+      <span id="m5">Non vérifié</span>
+    </div>
   </div>
-  <div class="engine">
-    <strong>M4</strong>
-    <span id="m4">Non vérifié</span>
-  </div>
-  <div class="engine">
-    <strong>M5</strong>
-    <span id="m5">Non vérifié</span>
-  </div>
-</div>
-
-<p class="muted">
-Les moteurs sont confirmés uniquement si l'API
-fournit des informations vérifiables.
-</p>
+  <p class="muted">
+    Les statuts proviennent exclusivement
+    des informations déclarées par l'API.
+  </p>
 </section>
 
 <section>
-<h2>🏇 Courses françaises</h2>
-<pre id="courses">Données indisponibles</pre>
+  <h2>📡 Statut API</h2>
+  <pre id="status">Données indisponibles</pre>
 </section>
 
 <section>
-<h2>🧠 Sélections M1 à M5</h2>
-<pre id="selections">Données indisponibles</pre>
+  <h2>🏇 Courses françaises</h2>
+  <pre id="courses">Données indisponibles</pre>
 </section>
 
 <section>
-<h2>🔒 FIGÉS avant départ</h2>
-<small>Consultation uniquement. Aucune écriture.</small>
-<pre id="figes">Données indisponibles</pre>
+  <h2>🧠 Sélections M1 à M5</h2>
+  <pre id="selections">Données indisponibles</pre>
 </section>
 
 <section>
-<h2>📊 Audits et résultats officiels</h2>
-<pre id="audits">Données indisponibles</pre>
+  <h2>🔒 FIGÉS avant départ</h2>
+  <p class="muted">
+    Lecture seule. Aucun FIGÉ créé,
+    remplacé ou modifié.
+  </p>
+  <pre id="figes">Données indisponibles</pre>
 </section>
 
 <section>
-<h2>⚙ Diagnostic technique</h2>
-<pre id="diagnostic">En attente</pre>
+  <h2>📋 Audits et résultats officiels</h2>
+  <pre id="audits">Données indisponibles</pre>
 </section>
+
+<section>
+  <h2>⚙ Diagnostic technique</h2>
+  <pre id="diagnostic">En attente</pre>
+</section>
+
+<section>
+  <h2>🧪 Résultats des tests internes</h2>
+  <pre id="test-results">Tests non exécutés.</pre>
+</section>
+
+</main>
 
 <footer>
-🇸🇳 X1000 V2 — Intelligence Hippique
-<br>
-Lecture seule — France — M1 à M5
+  🇸🇳🧠🇫🇷 X1000-intelligence-hippique-v2
+  <p>M1 — M2 — M3 — M4 — M5</p>
+  <p>
+    Consultation uniquement —
+    FIGÉS et archives préservés
+  </p>
 </footer>
 
 <script>
 "use strict";
 
-const input = document.getElementById("api");
-const state = document.getElementById("state");
-const button = document.getElementById("refresh");
+(() => {
+  const ENDPOINTS = Object.freeze([
+    "status", "courses", "selections",
+    "figes", "audits", "diagnostic"
+  ]);
 
-const sections = [
-  "status",
-  "courses",
-  "selections",
-  "figes",
-  "audits",
-  "diagnostic"
-];
+  const DATA_ENDPOINTS = Object.freeze([
+    "courses", "selections", "figes", "audits"
+  ]);
 
-let requestId = 0;
+  const TIMEOUT_MS = 10000;
+  const MAX_BYTES = 2 * 1024 * 1024;
+  const MAX_ITEMS = 100;
+  const MAX_DEPTH = 12;
+  const STORAGE_KEY = "x1000-api";
 
-try {
-  input.value =
-    localStorage.getItem("x1000-api") || "";
-} catch {
-  input.value = "";
-}
+  const input = document.getElementById("api");
+  const state = document.getElementById("state");
+  const refreshButton =
+    document.getElementById("refresh");
+  const testsButton =
+    document.getElementById("tests");
 
-function show(name, value) {
-  const element = document.getElementById(name);
-  if (!element) return;
+  let requestId = 0;
+  let activeControllers = [];
 
-  element.textContent =
-    JSON.stringify(value, null, 2);
-}
-
-function resetEngines() {
-  for (let i = 1; i <= 5; i++) {
-    document.getElementById("m" + i).textContent =
-      "Non vérifié";
-  }
-}
-
-function updateEngines(status) {
-  resetEngines();
-
-  if (!status || typeof status !== "object") {
-    return;
+  function element(id) {
+    return document.getElementById(id);
   }
 
-  const engines = status.moteurs || status.engines;
-
-  if (!engines || typeof engines !== "object") {
-    return;
+  function setText(id, value) {
+    const node = element(id);
+    if (node) node.textContent = String(value);
   }
 
-  for (let i = 1; i <= 5; i++) {
-    const key = "M" + i;
-    const engine =
-      engines[key] || engines[key.toLowerCase()];
-
-    const element = document.getElementById("m" + i);
-
-    if (engine === true) {
-      element.textContent = "Actif (API)";
-    } else if (engine === false) {
-      element.textContent = "Inactif (API)";
-    } else if (engine && typeof engine === "object") {
-      const value = engine.actif ?? engine.active;
-
-      if (value === true) {
-        element.textContent = "Actif (API)";
-      } else if (value === false) {
-        element.textContent = "Inactif (API)";
-      }
-    }
+  function setState(message, cssClass = "") {
+    state.textContent = message;
+    state.className = cssClass;
   }
-}
 
-async function fetchJSON(base, endpoint) {
-  const controller = new AbortController();
+  function isRecord(value) {
+    return value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value);
+  }
 
-  const timeout = setTimeout(
-    () => controller.abort(),
-    10000
-  );
-
-  try {
-    const response = await fetch(
-      base + "/api/" + endpoint,
-      {
-        method: "GET",
-        signal: controller.signal,
-        cache: "no-store",
-        redirect: "error",
-        headers: {
-          "Accept": "application/json"
-        }
-      }
+  function own(object, key) {
+    return Object.prototype.hasOwnProperty.call(
+      object, key
     );
+  }
 
-    if (!response.ok) {
-      throw new Error("HTTP " + response.status);
+  function validateURL(value) {
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error("Adresse API manquante");
     }
 
-    return await response.json();
+    if (value.length > 2048) {
+      throw new Error("Adresse trop longue");
+    }
 
-  } finally {
-    clearTimeout(timeout);
-  }
-}
+    let url;
+    try {
+      url = new URL(value.trim());
+    } catch {
+      throw new Error("URL incorrecte");
+    }
 
-async function refresh() {
-  if (button.disabled) return;
+    const local =
+      url.hostname === "localhost" ||
+      url.hostname === "127.0.0.1" ||
+      url.hostname === "[::1]";
 
-  const id = ++requestId;
-  const base = input.value.trim().replace(/\/+$/, "");
-
-  let url;
-
-  try {
-    url = new URL(base);
-
-    if (url.protocol !== "https:") {
-      throw new Error("HTTPS obligatoire");
+    if (
+      url.protocol !== "https:" &&
+      !(local && url.protocol === "http:")
+    ) {
+      throw new Error(
+        "HTTPS obligatoire hors localhost"
+      );
     }
 
     if (url.username || url.password) {
-      throw new Error("Identifiants interdits");
+      throw new Error(
+        "Identifiants interdits dans l'URL"
+      );
     }
 
     if (url.search || url.hash) {
-      throw new Error("URL sans paramètres requise");
+      throw new Error(
+        "Paramètres et fragments interdits"
+      );
     }
 
-  } catch (error) {
-    state.textContent =
-      "Adresse API invalide : " + error.message;
-    return;
+    if (url.pathname !== "/" &&
+        url.pathname !== "") {
+      throw new Error(
+        "Utilisez la racine de l'API, sans /api"
+      );
+    }
+
+    return url.origin;
   }
 
-  try {
-    localStorage.setItem("x1000-api", base);
-  } catch {
-    // Le stockage local reste facultatif.
+  function resetEngines() {
+    for (let i = 1; i <= 5; i++) {
+      setText("m" + i, "Non vérifié");
+    }
   }
 
-  button.disabled = true;
-  state.textContent = "Connexion en cours...";
+  function resetCounters() {
+    for (const name of DATA_ENDPOINTS) {
+      setText("count-" + name, "—");
+    }
+  }
 
-  resetEngines();
+  function resetData(
+    message = "Données indisponibles"
+  ) {
+    resetEngines();
+    resetCounters();
 
-  sections.forEach(name => {
-    document.getElementById(name).textContent =
-      "Chargement...";
-  });
+    for (const name of ENDPOINTS) {
+      setText(name, message);
+    }
+  }
 
-  try {
-    const results = await Promise.allSettled(
-      sections.map(name => fetchJSON(base, name))
+  function engineValue(engine) {
+    if (engine === true) return true;
+    if (engine === false) return false;
+    if (!isRecord(engine)) return null;
+
+    if (typeof engine.actif === "boolean") {
+      return engine.actif;
+    }
+
+    if (typeof engine.active === "boolean") {
+      return engine.active;
+    }
+
+    if (typeof engine.disponible === "boolean") {
+      return engine.disponible;
+    }
+
+    return null;
+  }
+
+  function updateEngines(status) {
+    resetEngines();
+
+    if (!isRecord(status)) return;
+
+    const engines = status.moteurs ?? status.engines;
+
+    if (!isRecord(engines)) return;
+
+    for (let i = 1; i <= 5; i++) {
+      const key = "M" + i;
+
+      const engine = own(engines, key)
+        ? engines[key]
+        : engines[key.toLowerCase()];
+
+      const value = engineValue(engine);
+
+      if (value === true) {
+        setText("m" + i, "Actif (déclaré API)");
+      } else if (value === false) {
+        setText("m" + i, "Inactif (déclaré API)");
+      }
+    }
+  }
+
+  function extractList(data, name) {
+    if (Array.isArray(data)) return data;
+    if (!isRecord(data)) return null;
+
+    if (Array.isArray(data[name])) {
+      return data[name];
+    }
+
+    if (Array.isArray(data.items)) {
+      return data.items;
+    }
+
+    if (Array.isArray(data.data)) {
+      return data.data;
+    }
+
+    return null;
+  }
+
+  function updateCounter(name, data) {
+    const list = extractList(data, name);
+
+    setText(
+      "count-" + name,
+      list !== null ? list.length : "—"
+    );
+  }
+
+  function safePreview(value, depth = 0) {
+    if (depth >= MAX_DEPTH) {
+      return "[Profondeur maximale atteinte]";
+    }
+
+    if (Array.isArray(value)) {
+      const preview = value
+        .slice(0, MAX_ITEMS)
+        .map(item => safePreview(item, depth + 1));
+
+      if (value.length > MAX_ITEMS) {
+        preview.push(
+          `[${value.length - MAX_ITEMS} éléments supplémentaires masqués]`
+        );
+      }
+
+      return preview;
+    }
+
+    if (isRecord(value)) {
+      const output = Object.create(null);
+      const keys = Object.keys(value);
+
+      for (const key of keys.slice(0, MAX_ITEMS)) {
+        Object.defineProperty(output, key, {
+          value: safePreview(value[key], depth + 1),
+          enumerable: true,
+          configurable: true,
+          writable: true
+        });
+      }
+
+      if (keys.length > MAX_ITEMS) {
+        output["[champs masqués]"] =
+          keys.length - MAX_ITEMS;
+      }
+
+      return output;
+    }
+
+    return value;
+  }
+
+  function showJSON(name, data) {
+    try {
+      setText(
+        name,
+        JSON.stringify(safePreview(data), null, 2)
+      );
+    } catch {
+      setText(name, "Affichage JSON impossible");
+    }
+  }
+
+  async function fetchJSON(
+    base, endpoint, controller
+  ) {
+    const timeout = setTimeout(
+      () => controller.abort(),
+      TIMEOUT_MS
     );
 
-    if (id !== requestId) return;
+    try {
+      const response = await fetch(
+        base + "/api/" + endpoint,
+        {
+          method: "GET",
+          mode: "cors",
+          credentials: "omit",
+          cache: "no-store",
+          redirect: "error",
+          referrerPolicy: "no-referrer",
+          signal: controller.signal,
+          headers: {
+            "Accept": "application/json"
+          }
+        }
+      );
 
-    let failures = 0;
+      if (!response.ok) {
+        throw new Error(
+          "HTTP " + response.status
+        );
+      }
 
-    results.forEach((result, index) => {
-      const name = sections[index];
+      const type =
+        response.headers.get("content-type") || "";
 
-      if (result.status === "fulfilled") {
-        show(name, result.value);
+      if (
+        !/^application\/json(?:\s*;|$)/i.test(type) &&
+        !/^application\/[\w.+-]+\+json(?:\s*;|$)/i.test(type)
+      ) {
+        throw new Error("Réponse non JSON");
+      }
 
-        if (name === "status") {
-          updateEngines(result.value);
+      const reader = response.body?.getReader();
+
+      if (!reader) {
+        throw new Error(
+          "Flux de réponse indisponible"
+        );
+      }
+
+      const chunks = [];
+      let total = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) break;
+
+        total += value.byteLength;
+
+        if (total > MAX_BYTES) {
+          await reader.cancel().catch(() => {});
+          throw new Error(
+            "Réponse trop volumineuse"
+          );
         }
 
-      } else {
-        failures++;
-
-        const error = result.reason;
-
-        const message =
-          error?.name === "AbortError"
-            ? "Délai dépassé (10 secondes)"
-            : (error?.message || "Connexion impossible");
-
-        document.getElementById(name).textContent =
-          "Indisponible : " + message;
+        chunks.push(value);
       }
-    });
 
-    if (failures === 0) {
-      state.textContent =
-        "✅ API accessible — données actualisées";
-    } else {
-      state.textContent =
-        "⚠️ " + failures +
-        " rubrique(s) indisponible(s) sur " +
-        sections.length +
-        ". Vérifiez l'API et CORS.";
+      const bytes = new Uint8Array(total);
+      let offset = 0;
+
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+
+      const text = new TextDecoder(
+        "utf-8",
+        { fatal: true }
+      ).decode(bytes);
+
+      const data = JSON.parse(text);
+
+      if (!Array.isArray(data) && !isRecord(data)) {
+        throw new Error(
+          "Structure JSON inattendue"
+        );
+      }
+
+      return data;
+
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  function errorMessage(error) {
+    if (error?.name === "AbortError") {
+      return "Délai dépassé ou requête annulée";
     }
 
-  } catch (error) {
-    state.textContent =
-      "Erreur technique : " + error.message;
+    if (error instanceof TypeError) {
+      return "Connexion, réseau ou CORS indisponible";
+    }
 
-  } finally {
-    button.disabled = false;
+    return error?.message || "Erreur inconnue";
   }
-}
 
-button.addEventListener("click", refresh);
+  async function refresh() {
+    const id = ++requestId;
+
+    for (const controller of activeControllers) {
+      controller.abort();
+    }
+
+    activeControllers = [];
+
+    let base;
+
+    try {
+      base = validateURL(input.value);
+    } catch (error) {
+      resetData();
+      setState(
+        "Adresse API invalide : " + error.message,
+        "bad"
+      );
+      return;
+    }
+
+    try {
+      localStorage.setItem(STORAGE_KEY, base);
+    } catch {
+      // Stockage facultatif.
+    }
+
+    refreshButton.disabled = true;
+    setState("Connexion en cours...", "warning");
+    resetData("Chargement...");
+
+    const controllers = ENDPOINTS.map(
+      () => new AbortController()
+    );
+
+    activeControllers = controllers;
+
+    try {
+      const results = await Promise.allSettled(
+        ENDPOINTS.map((name, index) =>
+          fetchJSON(base, name, controllers[index])
+        )
+      );
+
+      if (id !== requestId) return;
+
+      let failures = 0;
+
+      results.forEach((result, index) => {
+        const name = ENDPOINTS[index];
+
+        if (result.status === "fulfilled") {
+          showJSON(name, result.value);
+
+          if (name === "status") {
+            updateEngines(result.value);
+          }
+
+          if (DATA_ENDPOINTS.includes(name)) {
+            updateCounter(name, result.value);
+          }
+
+        } else {
+          failures++;
+          setText(
+            name,
+            "Indisponible : " +
+            errorMessage(result.reason)
+          );
+        }
+      });
+
+      if (failures === 0) {
+        setState(
+          "API accessible — 6 rubriques reçues",
+          "good"
+        );
+      } else if (failures < ENDPOINTS.length) {
+        setState(
+          "API partielle : " +
+          (ENDPOINTS.length - failures) +
+          "/6 rubriques reçues",
+          "warning"
+        );
+      } else {
+        setState(
+          "API indisponible — vérifiez HTTPS, " +
+          "le serveur et CORS",
+          "bad"
+        );
+      }
+
+    } catch (error) {
+      if (id === requestId) {
+        setState(
+          "Erreur technique : " +
+          errorMessage(error),
+          "bad"
+        );
+      }
+
+    } finally {
+      if (id === requestId) {
+        activeControllers = [];
+        refreshButton.disabled = false;
+      }
+    }
+  }
+
+  function runTests() {
+    const results = [];
+
+    function test(name, condition) {
+      results.push({
+        test: name,
+        resultat: condition ? "OK" : "ECHEC"
+      });
+    }
+
+    function rejectsURL(url) {
+      try {
+        validateURL(url);
+        return false;
+      } catch {
+        return true;
+      }
+    }
+
+    test(
+      "HTTPS autorisé",
+      validateURL("https://example.org") ===
+        "https://example.org"
+    );
+
+    test(
+      "HTTP distant interdit",
+      rejectsURL("http://example.org")
+    );
+
+    test(
+      "HTTP localhost autorisé",
+      validateURL("http://localhost:8000") ===
+        "http://localhost:8000"
+    );
+
+    test(
+      "Identifiants interdits",
+      rejectsURL("https://user:pass@example.org")
+    );
+
+    test(
+      "Paramètres interdits",
+      rejectsURL("https://example.org/?token=abc")
+    );
+
+    test(
+      "Chemins API interdits",
+      rejectsURL("https://example.org/api")
+    );
+
+    test(
+      "Protocole javascript interdit",
+      rejectsURL("javascript:alert(1)")
+    );
+
+    test(
+      "Moteur actif explicite",
+      engineValue({ actif: true }) === true
+    );
+
+    test(
+      "Moteur inactif explicite",
+      engineValue({ actif: false }) === false
+    );
+
+    test(
+      "Moteur inconnu non confirmé",
+      engineValue({ statut: "inconnu" }) === null
+    );
+
+    test(
+      "Extraction liste directe",
+      extractList([1, 2, 3], "courses").length === 3
+    );
+
+    test(
+      "Extraction liste enveloppée",
+      extractList(
+        { courses: [1, 2] },
+        "courses"
+      ).length === 2
+    );
+
+    test(
+      "Limitation affichage 100 entrées",
+      safePreview(
+        Array.from({ length: 150 }, (_, i) => i)
+      ).length === 101
+    );
+
+    test(
+      "Profondeur JSON limitée",
+      safePreview(
+        { a: { b: 1 } },
+        MAX_DEPTH
+      ) === "[Profondeur maximale atteinte]"
+    );
+
+    const total = results.length;
+    const passed = results.filter(
+      r => r.resultat === "OK"
+    ).length;
+
+    showJSON("test-results", {
+      bilan: passed + "/" + total,
+      statut: passed === total
+        ? "TESTS INTERNES REUSSIS"
+        : "ECHEC DE CONTROLE",
+      precision:
+        "Tests locaux sans réseau et sans écriture API",
+      tests: results
+    });
+
+    return passed === total;
+  }
+
+  try {
+    input.value =
+      localStorage.getItem(STORAGE_KEY) || "";
+  } catch {
+    input.value = "";
+  }
+
+  refreshButton.addEventListener(
+    "click", refresh
+  );
+
+  testsButton.addEventListener(
+    "click", runTests
+  );
+
+  input.addEventListener("keydown", event => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (!refreshButton.disabled) {
+        refresh();
+      }
+    }
+  });
+
+  // LECTURE SEULE
+  // Aucun POST, PUT, PATCH ou DELETE.
+  // Aucun FIGE automatique.
+  // Aucune modification des archives.
+  // Aucun appel direct aux moteurs.
+  // Aucune collecte PMU.
+  // Aucune publication automatique.
+
+})();
 </script>
 
 </body>
