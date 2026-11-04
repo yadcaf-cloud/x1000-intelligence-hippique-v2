@@ -1,0 +1,213 @@
+name: "X1000 V2.4 - Reparation controlee M1-M5"
+
+run-name: "X1000 V2.4 - Audit sans publication"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x1000-v24-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audit-x1000:
+    name: "Audit technique M1 a M5"
+
+    runs-on: ubuntu-24.04
+
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+
+    env:
+      TZ: Europe/Paris
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONNOUSERSITE: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHON: python3
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+
+      # ======================================================
+      # 1. RECUPERATION SECURISEE
+      # ======================================================
+
+      - name: "Recuperer le depot sans identifiants persistants"
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          clean: true
+
+      # ======================================================
+      # 2. INSTALLATION PYTHON
+      # ======================================================
+
+      - name: "Installer Python 3.12"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ======================================================
+      # 3. VERIFIER LE SCRIPT
+      # ======================================================
+
+      - name: "Verifier la presence et la syntaxe du script"
+        run: |
+          set -Eeuo pipefail
+
+          SCRIPT="scripts/reparation_controlee_x1000_v24.sh"
+
+          test -f "$SCRIPT"
+
+          bash -n "$SCRIPT"
+
+          echo "Script present"
+          echo "Syntaxe Bash valide"
+
+      # ======================================================
+      # 4. CONTROLE DE L'ETAT INITIAL
+      # ======================================================
+
+      - name: "Verifier la proprete du depot"
+        run: |
+          set -Eeuo pipefail
+
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+          echo "Depot propre"
+          echo "Aucune modification initiale"
+
+      # ======================================================
+      # 5. SAUVEGARDER LES EMPREINTES INITIALES
+      # ======================================================
+
+      - name: "Memoriser les empreintes des fichiers suivis"
+        run: |
+          set -Eeuo pipefail
+
+          git ls-files -z \
+            | xargs -0 -r sha256sum \
+            > "$RUNNER_TEMP/x1000-originals.sha256"
+
+          echo "Empreintes initiales calculees"
+
+      # ======================================================
+      # 6. EXECUTER LA REPARATION EN ENVIRONNEMENT TEMPORAIRE
+      # ======================================================
+
+      - name: "Tester la reparation controlee"
+        id: reparation
+        run: |
+          set -Eeuo pipefail
+
+          echo "Demarrage du controle X1000 V2.4"
+
+          bash scripts/reparation_controlee_x1000_v24.sh
+
+          echo "Script termine sans erreur"
+
+      # ======================================================
+      # 7. CONTROLER LES FICHIERS CREES
+      # ======================================================
+
+      - name: "Verifier les copies normalisees"
+        if: always()
+        run: |
+          set -Eeuo pipefail
+
+          if [ "${{ steps.reparation.outcome }}" != "success" ]; then
+            echo "Reparation non terminee"
+            exit 1
+          fi
+
+          for moteur in m1 m2 m3 m4 m5; do
+            test -f "moteurs/${moteur}.py"
+          done
+
+          test -f moteurs/noyau_commun.py
+          test -f moteurs/__init__.py
+          test -f verification_moteurs_v24.py
+
+          echo "Copies normalisees presentes"
+
+      # ======================================================
+      # 8. VERIFIER LES ORIGINAUX ET ARCHIVES
+      # ======================================================
+
+      - name: "Verifier l'integrite du depot original"
+        if: always()
+        run: |
+          set -Eeuo pipefail
+
+          sha256sum -c \
+            "$RUNNER_TEMP/x1000-originals.sha256"
+
+          git diff --exit-code HEAD --
+          git diff --cached --exit-code HEAD --
+
+          echo "Tous les fichiers suivis sont inchanges"
+          echo "Archives suivies preservees"
+
+      # ======================================================
+      # 9. CONTROLER LA BRANCHE LOCALE
+      # ======================================================
+
+      - name: "Verifier la branche de travail"
+        if: ${{ steps.reparation.outcome == 'success' }}
+        run: |
+          set -Eeuo pipefail
+
+          BRANCHE="$(git branch --show-current)"
+
+          test "$BRANCHE" = "fix/audit-general-x1000-v24"
+
+          echo "Branche locale correcte"
+          echo "Aucun push effectue"
+
+      # ======================================================
+      # 10. EXECUTER LE DIAGNOSTIC FINAL
+      # ======================================================
+
+      - name: "Diagnostic general M1 a M5"
+        if: ${{ steps.reparation.outcome == 'success' }}
+        run: |
+          set -Eeuo pipefail
+
+          python3 -B verification_moteurs_v24.py
+
+          echo "Diagnostic technique termine"
+
+      # ======================================================
+      # 11. SYNTHESE
+      # ======================================================
+
+      - name: "Afficher le bilan de securite"
+        if: always()
+        run: |
+          {
+            echo "## X1000 V2.4 - Audit controle"
+            echo ""
+            echo "- Depot distant : aucune ecriture"
+            echo "- Permissions GitHub : lecture seule"
+            echo "- Commit automatique : aucun"
+            echo "- Push automatique : aucun"
+            echo "- Publication automatique : aucune"
+            echo "- FIGE automatique : aucun"
+            echo "- Collecte PMU : aucune dans le script teste"
+            echo "- Archives suivies : controle d'integrite"
+            echo "- Copies de travail : runner temporaire"
+            echo ""
+            echo "Resultat de la reparation : ${{ steps.reparation.outcome }}"
+            echo ""
+            echo "La validation sportive et officielle PMU"
+            echo "n'est pas realisee par ce workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
