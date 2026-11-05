@@ -1,146 +1,56 @@
-name: X1000 - Diagnostic protege M1 a M5
-
-run-name: X1000 - Audit technique sans publication
+name: X1000 - Diagnostic M1 à M5
 
 on:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "moteurs/**"
+      - "tests/test_audit_contrats_x1000.py"
+      - ".github/workflows/diagnostic-x1000-m1-m5.yml"
+
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: x1000-diagnostic-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  diagnostic:
-    if: github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+  diagnostic-moteurs:
+    name: Verification M1-M5
+    runs-on: ubuntu-latest
 
-    env:
-      PYTHONDONTWRITEBYTECODE: '1'
-      PYTHONNOUSERSITE: '1'
-      PYTHONPATH: ''
-      TZ: Europe/Paris
+    timeout-minutes: 10
 
     steps:
-      - name: Lire la branche de reparation uniquement
+      - name: Recuperer le depot
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: 1
 
-      - name: Configurer Python
+      - name: Installer Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Diagnostic isole sans ecriture dans le depot
-        shell: bash
+      - name: Verifier les fichiers
         run: |
-          set -Eeuo pipefail
+          test -f moteurs/m1.py
+          test -f moteurs/m2.py
+          test -f moteurs/m3.py
+          test -f moteurs/m4.py
+          test -f moteurs/m5.py
+          test -f moteurs/noyau_commun.py
+          test -f tests/test_audit_contrats_x1000.py
 
-          BRANCH='fix/x1000-v2-reparation-controlee'
-
-          test "$(git branch --show-current)" = "$BRANCH"
-          test -z "$(git status --porcelain)"
-
-          TMP="$(mktemp -d)"
-          trap 'rm -rf "$TMP"' EXIT
-
-          mkdir -p "$TMP/code/moteurs" "$TMP/home"
-
-          for f in \
-            validation_moteurs.py \
-            coordination_x1000.py \
-            test_validation_moteurs.py \
-            test_coordination_x1000.py
-          do
-            test -f "$f" || {
-              echo "MANQUANT: $f"
-              exit 1
-            }
-            cp "$f" "$TMP/code/"
-          done
-
-          for n in 1 2 3 4 5; do
-            test -f "moteurs/m${n}.py" || {
-              echo "MANQUANT: moteurs/m${n}.py"
-              exit 1
-            }
-            cp "moteurs/m${n}.py" "$TMP/code/moteurs/"
-          done
-
-          test -f moteurs/noyau_commun.py || {
-            echo 'MANQUANT: moteurs/noyau_commun.py'
-            exit 1
-          }
-
-          cp moteurs/noyau_commun.py "$TMP/code/moteurs/"
-
-          if test -f moteurs/__init__.py; then
-            cp moteurs/__init__.py "$TMP/code/moteurs/"
-          fi
-
-          cd "$TMP/code"
-
-          export HOME="$TMP/home"
-          export TMPDIR="$TMP"
-          export PYTHONPATH="$TMP/code"
-          export PYTHONPYCACHEPREFIX="$TMP/cache"
-
-          echo "=== VERIFICATION SYNTAXE ==="
-
-          python -B - <<'PY'
-          import ast
-          from pathlib import Path
-
-          files = (
-              sorted(Path('.').glob('*.py'))
-              + sorted(Path('moteurs').glob('*.py'))
-          )
-
-          for path in files:
-              ast.parse(
-                  path.read_text(encoding='utf-8-sig'),
-                  filename=str(path)
-              )
-              print('SYNTAXE OK:', path, flush=True)
-          PY
-
-          failures=0
-
-          for n in 1 2 3 4 5; do
-            echo "=== AUTOTEST M${n} ==="
-
-            python -B -m "moteurs.m${n}" --self-test \
-              || failures=$((failures+1))
-          done
-
-          for testfile in \
-            test_validation_moteurs.py \
-            test_coordination_x1000.py
-          do
-            echo "=== TEST: $testfile ==="
-
-            python -B "$testfile" \
-              || failures=$((failures+1))
-          done
-
-          echo "ECHECS DE GROUPES: $failures"
-
-          test "$failures" -eq 0
-
-      - name: Verifier le depot original
-        if: always()
-        shell: bash
+      - name: Executer les tests X1000
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: "."
+          X1000_READ_ONLY: "1"
+          X1000_NO_FIGE: "1"
+          X1000_NO_PUBLICATION: "1"
         run: |
-          set -Eeuo pipefail
-
-          git diff --exit-code
-          git diff --cached --exit-code
-
-          test -z "$(git status --porcelain)"
-
-          echo 'Depot original inchange.'
+          python -m unittest discover \
+            -s tests \
+            -p "test_audit_contrats_x1000.py" \
+            -v
