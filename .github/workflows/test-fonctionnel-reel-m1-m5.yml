@@ -1,0 +1,64 @@
+name: X1000 - Test fonctionnel M1 a M5
+
+on:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "moteurs/**"
+      - "tests/test_fonctionnel_reel_m1_m5.py"
+      - "tests/donnees_reelles/**"
+      - ".github/workflows/test-fonctionnel-reel-m1-m5.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test-moteurs:
+    name: Diagnostic M1-M5 lecture seule
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONNOUSERSITE: "1"
+      TZ: Europe/Paris
+      X1000_READ_ONLY: "1"
+      X1000_NO_PUBLICATION: "1"
+      X1000_NO_FIGE: "1"
+
+    steps:
+      - name: Checkout branche controlee
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verifier la branche
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = \
+            "fix/x1000-v2-reparation-controlee"
+          test ! -e .git/index.lock
+          echo "Branche autorisee"
+
+      - name: Executer le diagnostic isole
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B tests/test_fonctionnel_reel_m1_m5.py
+
+      - name: Verifier le depot intact
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "Fichiers suivis et non suivis : intacts"
