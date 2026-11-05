@@ -1,0 +1,119 @@
+name: X1000 V2.4 - Diagnostic M1 a M5
+
+run-name: Diagnostic controle sans publication
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "m1.py"
+      - "m2.py"
+      - "m3.py"
+      - "m4.py"
+      - "m5.py"
+      - "moteurs/**"
+      - "noyau_commun.py"
+      - "validation_moteurs.py"
+      - "test_validation_moteurs.py"
+      - "coordination_x1000.py"
+      - ".github/workflows/diagnostic-moteurs.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x1000-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    name: Verification M1-M5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    env:
+      TZ: Europe/Paris
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONNOUSERSITE: "1"
+
+    steps:
+      - name: Recuperer la branche
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Verifier les fichiers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for f in \
+            m1.py m2.py m3.py m4.py m5.py \
+            moteurs/noyau_commun.py \
+            validation_moteurs.py \
+            test_validation_moteurs.py \
+            coordination_x1000.py
+          do
+            test -f "$f" || {
+              echo "::error::Fichier absent : $f"
+              exit 1
+            }
+            echo "OK : $f"
+          done
+
+      - name: Verifier la syntaxe Python
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -B - <<'PY'
+          import ast
+          from pathlib import Path
+
+          fichiers = [
+              "m1.py", "m2.py", "m3.py",
+              "m4.py", "m5.py",
+              "moteurs/noyau_commun.py",
+              "validation_moteurs.py",
+              "test_validation_moteurs.py",
+              "coordination_x1000.py",
+          ]
+          for fichier in fichiers:
+              p = Path(fichier)
+              ast.parse(
+                  p.read_text(encoding="utf-8"),
+                  filename=str(p),
+              )
+              print("SYNTAXE OK :", fichier)
+          PY
+
+      - name: Auto-test validation moteurs
+        run: python -B validation_moteurs.py
+
+      - name: Tests renforces M1-M5
+        run: python -B test_validation_moteurs.py
+
+      - name: Verifier absence de modifications
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git status --short
+          if test -n "$(git status --porcelain)"; then
+            echo "::error::Modifications detectees"
+            exit 1
+          fi
+
+      - name: Bilan final
+        if: success()
+        run: |
+          echo "DIAGNOSTIC TERMINE : OK"
+          echo "Aucune collecte PMU par le workflow"
+          echo "Aucune publication automatique"
+          echo "Aucun FIGE automatique"
+          echo "Aucun deploiement"
+          echo "Archives inchangees"
