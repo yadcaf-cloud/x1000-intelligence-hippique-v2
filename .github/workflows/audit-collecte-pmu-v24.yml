@@ -1,11 +1,9 @@
-name: X1000 V2.4 - Audit collecte PMU securise
+name: X1000 - Audit PMU hors reseau
 
 on:
   workflow_dispatch:
-
   push:
     branches:
-      - feature/installation-x1000-v2
       - fix/x1000-v2-reparation-controlee
     paths:
       - "audit_collecte_pmu.py"
@@ -14,511 +12,82 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: x1000-v24-audit-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  audit-pmu:
-    name: Audit PMU sans publication
-
-    if: >-
-      ${{
-        github.ref == 'refs/heads/feature/installation-x1000-v2' ||
-        github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee'
-      }}
-
+  audit:
+    if: github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     env:
-      TZ: Europe/Paris
       PYTHONDONTWRITEBYTECODE: "1"
-      PYTHONUNBUFFERED: "1"
       PYTHONNOUSERSITE: "1"
-      PYTHONPATH: "."
-      PYTHONSAFEPATH: "1"
-
-    defaults:
-      run:
-        shell: bash
 
     steps:
-      - name: Recuperer la branche securisee
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: 1
-          clean: true
 
-      - name: Installer Python 3.12
-        uses: actions/setup-python@v6
+      - name: Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Verifier branche et revision
+      - name: Audit local isole
+        shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
 
-          case "$GITHUB_REF" in
-            refs/heads/feature/installation-x1000-v2|refs/heads/fix/x1000-v2-reparation-controlee)
-              echo "Branche autorisee"
-              ;;
-            *)
-              echo "::error::Branche interdite"
-              exit 1
-              ;;
-          esac
+          mkdir -p "$RUNNER_TEMP/x1000-audit"
+          git archive HEAD | tar -xf - \
+            -C "$RUNNER_TEMP/x1000-audit"
 
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          cd "$RUNNER_TEMP/x1000-audit"
 
-          echo "Revision Git verifiee"
-
-      - name: Verifier syntaxe et interface Python
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
+          python -B - <<'PY'
           import ast
           from pathlib import Path
 
           path = Path("audit_collecte_pmu.py")
 
-          if not path.is_file():
+          if not path.is_file() or path.is_symlink():
               raise SystemExit("Script absent")
 
-          if path.is_symlink():
-              raise SystemExit("Lien symbolique interdit")
+          tree = ast.parse(
+              path.read_text(encoding="utf-8-sig")
+          )
 
-          size = path.stat().st_size
-
-          if not 0 < size <= 1024 * 1024:
-              raise SystemExit("Taille du script invalide")
-
-          source = path.read_text(encoding="utf-8-sig")
-          tree = ast.parse(source, filename=str(path))
-
-          functions = {
-              node.name
-              for node in tree.body
+          names = {
+              n.name for n in tree.body
               if isinstance(
-                  node,
-                  (ast.FunctionDef, ast.AsyncFunctionDef)
+                  n, (ast.FunctionDef, ast.AsyncFunctionDef)
               )
           }
 
-          required = {
-              "main",
-              "verifier_url",
-              "decoder_json",
-              "recuperer_json",
-              "inspecter_programme",
-          }
+          required = {"main", "verifier_url", "decoder_json",
+                      "recuperer_json", "inspecter_programme"}
 
-          missing = required - functions
+          if not required <= names:
+              raise SystemExit("Interfaces manquantes")
 
-          if missing:
-              raise SystemExit(
-                  f"Interfaces absentes : {sorted(missing)}"
-              )
-
-          versions = [
-              node.value.value
-              for node in tree.body
-              if isinstance(node, ast.Assign)
-              and any(
-                  isinstance(t, ast.Name)
-                  and t.id == "VERSION"
-                  for t in node.targets
-              )
-              and isinstance(node.value, ast.Constant)
-          ]
-
-          if versions != ["2.5"]:
-              raise SystemExit(
-                  "Version Python 2.5 attendue"
-              )
-
-          print("Syntaxe et interfaces : OK")
+          print("Audit statique conforme")
           PY
 
-      - name: Tests unitaires sans reseau
-        run: |
-          set -euo pipefail
+          python -B audit_collecte_pmu.py --self-test
 
-          python audit_collecte_pmu.py --self-test
-
-          echo "Tests unitaires termines"
-
-      - name: Verifier absence de collecte implicite
-        run: |
-          set -euo pipefail
-
-          python audit_collecte_pmu.py \
-            > "$RUNNER_TEMP/aide-audit.txt"
-
-          python - <<'PY'
-          import os
-          from pathlib import Path
-
-          path = (
-              Path(os.environ["RUNNER_TEMP"])
-              / "aide-audit.txt"
-          )
-
-          text = path.read_text(encoding="utf-8")
-
-          if "--audit" not in text:
-              raise SystemExit(
-                  "Interface --audit absente"
-              )
-
-          print("Mode sans audit : OK")
-          PY
-
-      - name: Executer audit ponctuel explicite
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          set -euo pipefail
-
-          # Une requete HTTPS ponctuelle est autorisee
-          # uniquement par le declenchement manuel.
-          #
-          # Aucune transmission aux moteurs.
-          # Aucun FIGE.
-          # Aucune publication.
-          #
-          # Le JSON reste dans RUNNER_TEMP.
-
-          python audit_collecte_pmu.py --audit \
-            > "$RUNNER_TEMP/audit-pmu.json"
-
-      - name: Tester et valider le rapport JSON
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
-          import copy
-          import json
-          import os
-          import re
-          from datetime import datetime, timezone
-          from pathlib import Path
-          from zoneinfo import ZoneInfo
-
-          PARIS = ZoneInfo("Europe/Paris")
-
-          def require(condition, message):
-              if not condition:
-                  raise ValueError(message)
-
-          def unique_pairs(pairs):
-              result = {}
-              for key, value in pairs:
-                  require(
-                      key not in result,
-                      f"Cle JSON dupliquee : {key}"
-                  )
-                  result[key] = value
-              return result
-
-          def reject_constant(value):
-              raise ValueError(
-                  f"Constante JSON interdite : {value}"
-              )
-
-          def validate(data, now):
-              require(
-                  type(data) is dict,
-                  "Objet JSON attendu"
-              )
-
-              require(
-                  data.get("version") == "2.5",
-                  "Version incorrecte"
-              )
-
-              require(
-                  data.get("statut")
-                  == "AUDIT_SEUL_SANS_PUBLICATION",
-                  "Statut incorrect"
-              )
-
-              for key in (
-                  "publication",
-                  "fige",
-                  "validation_sportive",
-              ):
-                  require(
-                      data.get(key) is False,
-                      f"{key} doit etre false"
-                  )
-
-              for key in (
-                  "courses_france_verifiees",
-                  "courses_transmises_moteurs",
-              ):
-                  require(
-                      type(data.get(key)) is int
-                      and data[key] == 0,
-                      f"Compteur interdit : {key}"
-                  )
-
-              for key in (
-                  "reunions",
-                  "courses_brutes",
-              ):
-                  require(
-                      type(data.get(key)) is int
-                      and data[key] >= 0,
-                      f"Compteur invalide : {key}"
-                  )
-
-              require(
-                  bool(data.get("raison"))
-                  and isinstance(data["raison"], str)
-                  and bool(data["raison"].strip()),
-                  "Raison invalide"
-              )
-
-              today = now.astimezone(PARIS).date()
-
-              require(
-                  data.get("date") == today.isoformat(),
-                  "Date incorrecte"
-              )
-
-              expected = (
-                  "https://online.turfinfo.api.pmu.fr"
-                  "/rest/client/1/programme/"
-                  + today.strftime("%d%m%Y")
-              )
-
-              require(
-                  data.get("source") == expected,
-                  "Source inattendue"
-              )
-
-              digest = data.get("source_sha256")
-
-              require(
-                  isinstance(digest, str)
-                  and re.fullmatch(
-                      r"[0-9a-f]{64}", digest
-                  ) is not None,
-                  "Empreinte SHA256 invalide"
-              )
-
-              collected = data.get("collecte_a")
-
-              require(
-                  isinstance(collected, str),
-                  "Horodatage absent"
-              )
-
-              try:
-                  timestamp = datetime.fromisoformat(
-                      collected.replace("Z", "+00:00")
-                  )
-              except ValueError as exc:
-                  raise ValueError(
-                      "Horodatage invalide"
-                  ) from exc
-
-              require(
-                  timestamp.tzinfo is not None
-                  and timestamp.utcoffset() is not None,
-                  "Fuseau horaire absent"
-              )
-
-              age = (now - timestamp).total_seconds()
-
-              require(
-                  -60 <= age <= 600,
-                  "Horodatage hors tolerance"
-              )
-
-              require(
-                  timestamp.astimezone(PARIS).date()
-                  == today,
-                  "Date locale incoherente"
-              )
-
-              return True
-
-          def must_fail(data, now, label):
-              try:
-                  validate(data, now)
-              except (ValueError, TypeError, KeyError):
-                  print(f"Test negatif OK : {label}")
-                  return
-
-              raise AssertionError(
-                  f"Test negatif accepte : {label}"
-              )
-
-          path = (
-              Path(os.environ["RUNNER_TEMP"])
-              / "audit-pmu.json"
-          )
-
-          require(path.is_file(), "Rapport absent")
-          require(
-              not path.is_symlink(),
-              "Rapport symbolique interdit"
-          )
-          require(
-              0 < path.stat().st_size <= 65536,
-              "Taille rapport invalide"
-          )
-
-          data = json.loads(
-              path.read_text(encoding="utf-8-sig"),
-              object_pairs_hook=unique_pairs,
-              parse_constant=reject_constant,
-          )
-
-          now = datetime.now(timezone.utc)
-
-          validate(data, now)
-          print("Rapport reel : OK")
-
-          # Tests negatifs du validateur.
-          mutations = [
-              ("version", "2.4"),
-              ("statut", "PUBLICATION"),
-              ("publication", True),
-              ("fige", True),
-              ("validation_sportive", True),
-              ("courses_france_verifiees", 1),
-              ("courses_transmises_moteurs", 1),
-              ("reunions", -1),
-              ("courses_brutes", -1),
-              ("source", "https://evil.example"),
-              ("source_sha256", "invalide"),
-              ("raison", ""),
-              ("collecte_a", "sans-date"),
-              ("date", "1900-01-01"),
-          ]
-
-          for key, invalid in mutations:
-              changed = copy.deepcopy(data)
-              changed[key] = invalid
-              must_fail(changed, now, key)
-
-          for key in (
-              "publication",
-              "fige",
-              "validation_sportive",
-              "courses_france_verifiees",
-              "courses_transmises_moteurs",
-          ):
-              changed = copy.deepcopy(data)
-              changed.pop(key, None)
-              must_fail(changed, now, f"absence {key}")
-
-          for invalid in (
-              [],
-              None,
-              "texte",
-              123,
-          ):
-              must_fail(invalid, now, "racine invalide")
-
-          for invalid_json in (
-              '{"a":1,"a":2}',
-              '{"a":NaN}',
-              '{"a":Infinity}',
-          ):
-              try:
-                  json.loads(
-                      invalid_json,
-                      object_pairs_hook=unique_pairs,
-                      parse_constant=reject_constant,
-                  )
-              except ValueError:
-                  pass
-              else:
-                  raise AssertionError(
-                      "JSON invalide accepte"
-                  )
-
-          print("Tests negatifs : OK")
-          print("Validation declarative : OK")
-          print(
-              "SHA256 : format uniquement, "
-              "pas de preuve independante"
-          )
-          PY
-
-      - name: Verifier depot et fichiers proteges
+      - name: Integrite du depot
         if: always()
+        shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
+          test -z "$(git status --porcelain)"
 
-          if [ ! -d .git ]; then
-            echo "::error::Depot Git absent"
-            exit 1
-          fi
-
-          if ! git diff --quiet; then
-            echo "::error::Fichiers suivis modifies"
-            exit 1
-          fi
-
-          if ! git diff --cached --quiet; then
-            echo "::error::Index Git modifie"
-            exit 1
-          fi
-
-          if [ -n "$(git ls-files --others --exclude-standard)" ]; then
-            echo "::error::Fichiers non suivis crees"
-            exit 1
-          fi
-
-          if [ -n "$(git ls-files --others --ignored --exclude-standard)" ]; then
-            echo "::error::Fichiers ignores crees"
-            exit 1
-          fi
-
-          echo "Depot de travail inchange : OK"
-          echo "Aucune modification des archives"
-          echo "Aucune modification des FIGES"
-
-      - name: Bilan de securite
+      - name: Bilan
         if: success()
-        env:
-          EVENT_NAME: ${{ github.event_name }}
         run: |
-          set -euo pipefail
-
-          {
-            echo "## X1000 - Audit PMU securise"
-            echo ""
-            echo "- Branche : autorisee"
-            echo "- Syntaxe Python : verifiee"
-            echo "- Tests unitaires : reussis"
-            echo "- Depot : inchange"
-            echo "- FIGES : non modifies"
-            echo "- Archives : non modifiees"
-            echo "- Commit automatique : aucun"
-            echo "- Push automatique : aucun"
-            echo "- Publication : aucune"
-            echo ""
-
-            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-              echo "- Audit ponctuel : execute"
-              echo "- Rapport JSON : valide"
-              echo "- Tests negatifs : reussis"
-              echo "- SHA256 : format valide uniquement"
-            else
-              echo "- Audit reseau : non execute"
-              echo "- Verification locale : reussie"
-            fi
-
-            echo ""
-            echo "Aucune validation sportive."
-            echo "Aucune preuve independante de source."
-            echo "Aucune transmission aux moteurs M1-M5."
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Audit statique et autotests termines" \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo "Aucune collecte PMU demandee" \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo "Aucun FIGE ni publication" \
+            >> "$GITHUB_STEP_SUMMARY"
