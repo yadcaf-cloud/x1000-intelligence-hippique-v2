@@ -14,12 +14,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: x1000-test-reel-${{ github.ref }}
+  group: x1000-reel-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   diagnostic:
-    name: X1000 - Technique et reel separes
+    name: X1000 - Diagnostic M1 a M5
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
@@ -32,7 +32,7 @@ jobs:
       X1000_NO_PUBLICATION: "1"
 
     steps:
-      - name: Recuperer branche de reparation
+      - name: Recuperer la branche
         uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -42,11 +42,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Verifier branche et fichiers
+      - name: Verifier la branche
         shell: bash
         run: |
           set -euo pipefail
-
           test "$GITHUB_REF_NAME" = \
             "fix/x1000-v2-reparation-controlee"
 
@@ -58,9 +57,7 @@ jobs:
           test -f tests/test_fonctionnel_reel_m1_m5.py
           test -f tests/valider_donnees_reelles.py
 
-          echo "Branche et fichiers verifies"
-
-      - name: Autotests techniques M1 a M5
+      - name: Autotests techniques
         id: technique
         shell: bash
         run: |
@@ -74,23 +71,25 @@ jobs:
               tester_moteurs,
           )
 
-          with tempfile.TemporaryDirectory() as dossier:
-              os.chdir(dossier)
-              with protection():
-                  resultats = tester_moteurs()
+          with tempfile.TemporaryDirectory() as d:
+              ancien = os.getcwd()
+              try:
+                  os.chdir(d)
+                  with protection():
+                      resultats = tester_moteurs()
+              finally:
+                  os.chdir(ancien)
 
           if resultats:
               raise SystemExit(
-                  "Autotests : resultat inattendu"
+                  "Autotests techniques incoherents"
               )
 
-          print("AUTOTESTS TECHNIQUES : REUSSIS")
+          print("M1-M5 : AUTOTESTS REUSSIS")
           PY
 
-          echo "statut=REUSSIS" >> "$GITHUB_OUTPUT"
-
-      - name: Detecter les courses attestees
-        id: courses
+      - name: Detecter les donnees attestees
+        id: donnees
         shell: bash
         run: |
           set -euo pipefail
@@ -118,36 +117,28 @@ jobs:
 
           if not fichiers:
               print(
-                  "::notice::Tests reels NON EXECUTES : "
-                  "aucune fixture disponible."
+                  "::notice::Aucune course attestee. "
+                  "Tests reels non executes."
               )
           else:
               print(
-                  "Fixtures trouvees :", len(fichiers)
+                  "Courses candidates :", len(fichiers)
               )
           PY
 
-      - name: Valider les donnees reelles M1 a M5
+      - name: Valider les courses
         id: validation
-        if: steps.courses.outputs.presentes == 'true'
+        if: steps.donnees.outputs.presentes == 'true'
         shell: bash
         run: |
           set -euo pipefail
-
-          test "$GITHUB_REF_NAME" = \
-            "fix/x1000-v2-reparation-controlee"
-
           python -B tests/valider_donnees_reelles.py
 
-          echo "statut=REUSSIS" >> "$GITHUB_OUTPUT"
-
-          echo "Validation structurelle terminee"
-
-      - name: Tester les courses reelles M1 a M5
+      - name: Analyses reelles M1 a M5
         id: reel
         if: >-
           ${{
-            steps.courses.outputs.presentes == 'true'
+            steps.donnees.outputs.presentes == 'true'
             && steps.validation.outcome == 'success'
           }}
         shell: bash
@@ -166,65 +157,76 @@ jobs:
           )
 
           fichiers = sorted(FIXTURES.glob("*.json"))
+
           if not fichiers:
-              raise SystemExit("Aucune course reelle")
+              raise SystemExit("Aucune course")
 
           analyses = 0
+          ancien = os.getcwd()
 
-          with tempfile.TemporaryDirectory() as dossier:
-              os.chdir(dossier)
+          try:
+              with tempfile.TemporaryDirectory() as d:
+                  os.chdir(d)
 
-              with protection():
-                  for fichier in fichiers:
-                      course, actifs = charger_fixture(
-                          fichier
-                      )
-
-                      resultats = tester_moteurs(
-                          course, actifs
-                      )
-
-                      if set(resultats) != set(MOTEURS):
-                          raise SystemExit(
-                              "Moteurs incomplets"
+                  with protection():
+                      for fichier in fichiers:
+                          course, actifs = charger_fixture(
+                              fichier
                           )
 
-                      for nom in MOTEURS:
-                          statut = resultats[nom]["statut"]
-                          if statut != "ANALYSE_DISPONIBLE":
-                              raise SystemExit(
-                                  f"{nom} : {statut}"
-                              )
-                          analyses += 1
+                          resultats = tester_moteurs(
+                              course, actifs
+                          )
 
-                      print(
-                          "COURSE VALIDEE :", fichier.name
-                      )
+                          if set(resultats) != set(MOTEURS):
+                              raise AssertionError(
+                                  "Moteurs incomplets"
+                              )
+
+                          for nom in MOTEURS:
+                              statut = resultats[nom]["statut"]
+
+                              if statut != "ANALYSE_DISPONIBLE":
+                                  raise AssertionError(
+                                      f"{nom}: {statut}"
+                                  )
+
+                              if len(
+                                  resultats[nom]["numeros"]
+                              ) != 5:
+                                  raise AssertionError(
+                                      f"{nom}: classement incomplet"
+                                  )
+
+                              analyses += 1
+
+                          print(
+                              "COURSE ANALYSEE :",
+                              course["id"]
+                          )
+          finally:
+              os.chdir(ancien)
 
           attendu = len(fichiers) * len(MOTEURS)
 
           if analyses != attendu:
-              raise SystemExit(
+              raise AssertionError(
                   "Nombre d'analyses incorrect"
               )
 
-          print(
-              "ANALYSES REELLES REUSSIES :",
-              analyses
-          )
+          print("ANALYSES REUSSIES :", analyses)
 
           with open(
               os.environ["GITHUB_OUTPUT"],
               "a",
               encoding="utf-8",
           ) as sortie:
-              sortie.write("statut=REUSSIS\n")
               sortie.write(
                   f"analyses={analyses}\n"
               )
           PY
 
-      - name: Verifier absence de modifications
+      - name: Verifier integrite du depot
         id: integrite
         if: always()
         shell: bash
@@ -238,68 +240,56 @@ jobs:
             git ls-files --others --exclude-standard
           )"
 
-          echo "Depot de travail intact"
+          echo "DEPOT INTACT"
 
-      - name: Bilan final X1000
+      - name: Bilan X1000
         if: always()
         shell: bash
         env:
           TECHNIQUE: ${{ steps.technique.outcome }}
-          COURSES: ${{ steps.courses.outputs.nombre }}
-          PRESENTES: ${{ steps.courses.outputs.presentes }}
+          NOMBRE: ${{ steps.donnees.outputs.nombre }}
+          PRESENTES: ${{ steps.donnees.outputs.presentes }}
           VALIDATION: ${{ steps.validation.outcome }}
           REEL: ${{ steps.reel.outcome }}
           ANALYSES: ${{ steps.reel.outputs.analyses }}
           INTEGRITE: ${{ steps.integrite.outcome }}
         run: |
           {
-            echo "## X1000 - Bilan M1 a M5"
+            echo "## X1000 - Bilan M1-M5"
             echo ""
             echo "| Controle | Resultat |"
             echo "|---|---|"
-            echo "| Autotests techniques | $TECHNIQUE |"
-            echo "| Fixtures detectees | ${COURSES:-0} |"
-            echo "| Validation des donnees | $VALIDATION |"
-            echo "| Tests reels | $REEL |"
-            echo "| Analyses reelles | ${ANALYSES:-0} |"
-            echo "| Integrite depot | $INTEGRITE |"
+            echo "| Technique | $TECHNIQUE |"
+            echo "| Courses | ${NOMBRE:-0} |"
+            echo "| Validation | $VALIDATION |"
+            echo "| Analyses reelles | $REEL |"
+            echo "| Nombre analyses | ${ANALYSES:-0} |"
+            echo "| Integrite | $INTEGRITE |"
             echo ""
 
             if [[ "$PRESENTES" != "true" ]]; then
-              echo "### TESTS REELS NON EXECUTES"
-              echo ""
-              echo "Aucune course attestee disponible."
-              echo "Succes technique uniquement."
-            elif [[ "$VALIDATION" != "success" ]]; then
-              echo "### VALIDATION DES DONNEES ECHOUEE"
-              echo ""
-              echo "Les analyses reelles sont bloquees."
+              echo "Tests reels non executes."
+              echo "Aucune fixture attestee."
             elif [[ "$REEL" == "success" ]]; then
-              echo "### ANALYSES REELLES REUSSIES"
-              echo ""
-              echo "M1 a M5 : classements complets valides."
-              echo "Sources non verifiees en ligne."
+              echo "Tests fonctionnels reels reussis."
+              echo "Authenticite externe non controlee en ligne."
             else
-              echo "### TESTS REELS NON VALIDES"
-              echo ""
-              echo "Consulter les erreurs du job."
+              echo "Tests reels non valides."
             fi
 
             echo ""
-            echo "- Branche de reparation uniquement"
-            echo "- Lecture seule"
             echo "- Aucun FIGE"
             echo "- Aucune publication"
-            echo "- Aucune collecte PMU automatique"
-            echo "- Archives preservees"
+            echo "- Aucune collecte PMU"
+            echo "- Archives non modifiees"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Exiger la reussite des controles
+      - name: Statut final
         if: always()
         shell: bash
         env:
           TECHNIQUE: ${{ steps.technique.outcome }}
-          PRESENTES: ${{ steps.courses.outputs.presentes }}
+          PRESENTES: ${{ steps.donnees.outputs.presentes }}
           VALIDATION: ${{ steps.validation.outcome }}
           REEL: ${{ steps.reel.outcome }}
           INTEGRITE: ${{ steps.integrite.outcome }}
@@ -312,6 +302,8 @@ jobs:
           if [[ "$PRESENTES" == "true" ]]; then
             test "$VALIDATION" = "success"
             test "$REEL" = "success"
+          else
+            echo "::notice::Succes technique uniquement"
           fi
 
-          echo "CONTROLES X1000 : TERMINES"
+          echo "CONTROLES X1000 TERMINES"
