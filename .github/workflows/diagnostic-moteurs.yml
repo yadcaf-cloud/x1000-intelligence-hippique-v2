@@ -1,0 +1,59 @@
+name: X1000 V2.4 - Diagnostic M1 a M5
+
+run-name: Diagnostic sans publication
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "api.py"
+      - "verification_moteurs.py"
+      - "moteurs/**"
+      - ".github/workflows/diagnostic-moteurs.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x1000-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    name: Verification M1-M5 et API
+    runs-on: ubuntu-24.04
+
+    timeout-minutes: 10
+
+    env:
+      TZ: Europe/Paris
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONNOUSERSITE: "1"
+
+    steps:
+      - name: Recuperer la branche
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Executer les diagnostics
+        run: python -B verification_moteurs.py
+
+      - name: Controler les modifications
+        run: |
+          git status --short
+          test -z "$(git status --porcelain)"
+
+      - name: Confirmation
+        run: |
+          echo "Diagnostic termine."
+          echo "Aucune publication automatique."
+          echo "Aucun FIGE automatique."
+          echo "Archives inchangees."
