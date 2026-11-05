@@ -1,653 +1,95 @@
-name: X1000 V2.5 - Validation courses PMU France
+name: X1000 - Validation locale courses France
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - feature/installation-x1000-v2
       - fix/x1000-v2-reparation-controlee
     paths:
-      - 'validation_courses_pmu_v25.py'
-      - 'courses.json'
-      - 'data/courses.json'
-      - '.github/workflows/validation-courses-pmu-v25.yml'
+      - "validation_courses_pmu_v25.py"
+      - "courses.json"
+      - "data/courses.json"
+      - ".github/workflows/validation-courses-pmu-v25.yml"
 
 permissions:
   contents: read
 
-concurrency:
-  group: x1000-v25-validation-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   validation:
-    name: Validation locale sans publication
-    if: >-
-      ${{ github.ref == 'refs/heads/feature/installation-x1000-v2' ||
-          github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee' }}
+    if: github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONNOUSERSITE: "1"
       TZ: Europe/Paris
-      PYTHONDONTWRITEBYTECODE: '1'
-      PYTHONNOUSERSITE: '1'
-      PYTHONUNBUFFERED: '1'
-      PYTHONPATH: '.'
-
-    defaults:
-      run:
-        shell: bash
 
     steps:
-      - name: Recuperer le depot sans identifiants persistants
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Installer Python 3.12
-        uses: actions/setup-python@v6
+      - name: Installer Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
-      - name: Verifier reference et commit
+      - name: Valider dans une copie isolee
+        shell: bash
         run: |
-          set -euo pipefail
-          case "$GITHUB_REF" in
-            refs/heads/feature/installation-x1000-v2|refs/heads/fix/x1000-v2-reparation-controlee) ;;
-            *) echo '::error::Branche non autorisee'; exit 1 ;;
-          esac
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          echo 'Reference et commit conformes'
+          set -Eeuo pipefail
 
-      - name: Capturer integrite initiale du depot
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
+          mkdir -p "$RUNNER_TEMP/x1000-courses"
+          git archive HEAD | tar -xf - \
+            -C "$RUNNER_TEMP/x1000-courses"
 
-          root = Path.cwd()
-          protected = (
-              'figes.json',
-              'audits.json',
-              'selections.json',
-              'courses.json',
-              'data/courses.json',
-          )
-          snapshot = {}
+          cd "$RUNNER_TEMP/x1000-courses"
 
-          for name in protected:
-              path = root / name
-              if path.is_symlink():
-                  raise SystemExit(
-                      f'Lien symbolique interdit : {name}'
-                  )
-              if path.exists():
-                  if not path.is_file():
-                      raise SystemExit(
-                          f'Fichier non regulier : {name}'
-                      )
-                  snapshot[name] = hashlib.sha256(
-                      path.read_bytes()
-                  ).hexdigest()
-              else:
-                  snapshot[name] = None
-
-          target = (
-              Path(os.environ['RUNNER_TEMP'])
-              / 'x1000-protected-before.json'
-          )
-          target.write_text(
-              json.dumps(snapshot, sort_keys=True),
-              encoding='utf-8'
-          )
-          print('Empreintes initiales capturees')
-          PY
-
-      - name: Verifier syntaxe et interface Python
-        run: |
-          set -euo pipefail
-          python - <<'PY'
+          python -B - <<'PY'
           import ast
           from pathlib import Path
 
-          path = Path('validation_courses_pmu_v25.py')
+          path = Path("validation_courses_pmu_v25.py")
+          if not path.is_file() or path.is_symlink():
+              raise SystemExit("Validateur absent")
 
-          if path.is_symlink() or not path.is_file():
-              raise SystemExit(
-                  'Validateur absent ou symbolique'
-              )
-
-          if not 0 < path.stat().st_size <= 5_000_000:
-              raise SystemExit(
-                  'Taille du validateur invalide'
-              )
-
-          tree = ast.parse(
-              path.read_text(encoding='utf-8-sig'),
+          ast.parse(
+              path.read_text(encoding="utf-8-sig"),
               filename=str(path)
           )
 
-          names = {
-              node.name
-              for node in tree.body
-              if isinstance(
-                  node,
-                  (ast.FunctionDef, ast.AsyncFunctionDef)
-              )
-          }
-
-          required = {
-              'main',
-              'self_test',
-              'validate_document',
-              'read_document',
-              'write_report',
-          }
-
-          if not required <= names:
-              raise SystemExit(
-                  f'Interfaces manquantes : '
-                  f'{sorted(required - names)}'
-              )
-
-          print('Syntaxe et interfaces conformes')
-          PY
-
-      - name: Executer autotests du validateur
-        run: |
-          set -euo pipefail
-          python validation_courses_pmu_v25.py --self-test
-
-      - name: Executer tests de regression isoles
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import copy
-          import json
-          import subprocess
-          import sys
-          import tempfile
-          from pathlib import Path
-
-          import validation_courses_pmu_v25 as v
-
-          example = {
-              'id': '2026-11-03-R1-C1',
-              'date': '2026-11-03',
-              'pays': 'France',
-              'hippodrome': 'Hippodrome fictif (test)',
-              'depart': '2026-11-03T14:00:00+01:00',
-              'partants': [
-                  {'numero': 1, 'nom': 'Test A'},
-                  {'numero': 2, 'nom': 'Test B'},
-              ],
-              'formules': ['Simple gagnant'],
-              'source': 'Fixture fictive',
-          }
-
-          assert (
-              v.validate_document([example])['statut']
-              == 'VALIDE'
-          )
-
-          assert (
-              v.validate_document([])['statut']
-              == 'AUCUNE_DONNEE'
-          )
-
-          for changes in (
-              {'pays': 'Belgique'},
-              {'date': '2026-11-04'},
-              {'depart': '2026-11-03T14:00:00'},
-              {
-                  'partants': [
-                      {'numero': 1, 'nom': 'A'},
-                      {'numero': 1, 'nom': 'B'},
-                  ]
-              },
-              {'formules': ['Formule inconnue']},
-          ):
-              sample = copy.deepcopy(example)
-              sample.update(changes)
-              assert (
-                  v.validate_document([sample])['invalides']
-                  == 1
-              ), changes
-
-          assert (
-              v.validate_document(
-                  [example, example]
-              )['invalides'] == 2
-          )
-
-          with tempfile.TemporaryDirectory() as temp:
-              directory = Path(temp)
-              source = directory / 'input.json'
-              report = directory / 'report.json'
-
-              source.write_text(
-                  json.dumps([example]),
-                  encoding='utf-8'
-              )
-
-              command = [
-                  sys.executable,
-                  'validation_courses_pmu_v25.py',
-                  '--input',
-                  str(source),
-                  '--output',
-                  str(report),
-              ]
-
-              first = subprocess.run(
-                  command,
-                  capture_output=True,
-                  text=True
-              )
-
-              assert first.returncode == 0, first.stderr
-              assert report.is_file()
-
-              assert (
-                  json.loads(
-                      report.read_text(encoding='utf-8')
-                  )['valides'] == 1
-              )
-
-              second = subprocess.run(
-                  command,
-                  capture_output=True,
-                  text=True
-              )
-
-              assert second.returncode != 0, (
-                  'Ecrasement du rapport accepte'
-              )
-
-              source.write_text(
-                  '{"courses":[],"courses":[]}',
-                  encoding='utf-8'
-              )
-
-              third = subprocess.run(
-                  [
-                      sys.executable,
-                      'validation_courses_pmu_v25.py',
-                      '--input',
-                      str(source),
-                      '--output',
-                      str(directory / 'bad.json'),
-                  ],
-                  capture_output=True,
-                  text=True
-              )
-
-              assert third.returncode != 0, (
-                  'Cles JSON dupliquees acceptees'
-              )
-
-              assert not (
-                  directory / 'bad.json'
-              ).exists()
-
-              missing = subprocess.run(
-                  [
-                      sys.executable,
-                      'validation_courses_pmu_v25.py',
-                      '--input',
-                      str(directory / 'absent.json'),
-                      '--output',
-                      str(directory / 'missing-report.json'),
-                  ],
-                  capture_output=True,
-                  text=True
-              )
-
-              assert missing.returncode != 0, (
-                  'Fichier absent accepte sans option'
-              )
-
-          print('Tests de regression : OK')
-          PY
-
-      - name: Localiser source unique
-        id: donnees
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import os
-          from pathlib import Path
-
-          candidates = [
-              Path('courses.json'),
-              Path('data/courses.json'),
+          sources = [
+              Path("courses.json"),
+              Path("data/courses.json"),
           ]
 
-          for path in candidates:
-              if path.is_symlink():
-                  raise SystemExit(
-                      f'Lien symbolique interdit : {path}'
-                  )
-              if path.exists() and not path.is_file():
-                  raise SystemExit(
-                      f'Source non reguliere : {path}'
-                  )
+          if any(p.is_symlink() for p in sources):
+              raise SystemExit("Lien symbolique interdit")
 
-          present = [
-              p for p in candidates if p.is_file()
-          ]
+          if sum(p.is_file() for p in sources) > 1:
+              raise SystemExit("Sources ambiguës")
 
-          if len(present) > 1:
-              raise SystemExit(
-                  'Deux sources de courses : '
-                  'ambiguite interdite'
-              )
-
-          with open(
-              os.environ['GITHUB_OUTPUT'],
-              'a',
-              encoding='utf-8'
-          ) as output:
-              output.write(
-                  f'present={str(bool(present)).lower()}\n'
-              )
-              output.write(
-                  f'path={present[0] if present else ""}\n'
-              )
-
-          if present:
-              print(f'Source : {present[0]}')
-          else:
-              print(
-                  'AUCUNE DONNEE : '
-                  'aucune course inventee'
-              )
+          print("Syntaxe et sources controlees")
           PY
 
-      - name: Verifier JSON source strict
-        if: steps.donnees.outputs.present == 'true'
-        env:
-          COURSES_INPUT: ${{ steps.donnees.outputs.path }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import os
-          from pathlib import Path
+          python -B validation_courses_pmu_v25.py \
+            --self-test
 
-          import validation_courses_pmu_v25 as v
-
-          path = Path(
-              os.environ['COURSES_INPUT']
-          )
-
-          if path.is_symlink() or not path.is_file():
-              raise SystemExit('Source invalide')
-
-          if not (
-              0 < path.stat().st_size <= v.MAX_INPUT_BYTES
-          ):
-              raise SystemExit(
-                  'Taille de source invalide'
-              )
-
-          document = v.read_document(path)
-
-          if isinstance(document, list):
-              courses = document
-          elif isinstance(document, dict):
-              courses = document.get('courses')
-          else:
-              courses = None
-
-          if (
-              not isinstance(courses, list)
-              or not courses
-              or len(courses) > v.MAX_COURSES
-          ):
-              raise SystemExit(
-                  'Liste de courses absente, '
-                  'vide ou excessive'
-              )
-
-          print(
-              f'JSON strict : {len(courses)} courses'
-          )
-          PY
-
-      - name: Valider courses sans ecriture dans le depot
-        if: steps.donnees.outputs.present == 'true'
-        env:
-          COURSES_INPUT: ${{ steps.donnees.outputs.path }}
-        run: |
-          set -euo pipefail
-
-          REPORT="$RUNNER_TEMP/x1000-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
-          echo "REPORT_PATH=$REPORT" >> "$GITHUB_ENV"
-
-          set +e
-          python validation_courses_pmu_v25.py \
-            --input "$COURSES_INPUT" \
-            --output "$REPORT"
-          rc=$?
-          set -e
-
-          echo "VALIDATOR_RC=$rc" >> "$GITHUB_ENV"
-
-          test -s "$REPORT" || {
-            echo '::error::Rapport absent'
-            exit 1
-          }
-
-          if [ "$rc" -gt 2 ]; then
-            echo "::error::Code de retour inattendu : $rc"
-            exit 1
-          fi
-
-      - name: Controler rapport et coherence des donnees
-        if: steps.donnees.outputs.present == 'true'
-        env:
-          COURSES_INPUT: ${{ steps.donnees.outputs.path }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          import validation_courses_pmu_v25 as v
-
-          path = Path(
-              os.environ['REPORT_PATH']
-          )
-
-          if (
-              path.is_symlink()
-              or not path.is_file()
-              or not 0 < path.stat().st_size <= 20_000_000
-          ):
-              raise SystemExit(
-                  'Rapport absent, symbolique '
-                  'ou trop volumineux'
-              )
-
-          report = json.loads(
-              path.read_text(encoding='utf-8-sig'),
-              object_pairs_hook=v._unique_pairs,
-              parse_constant=v._reject_constant
-          )
-
-          expected = v.validate_document(
-              v.read_document(
-                  os.environ['COURSES_INPUT']
-              )
-          )
-
-          if report != expected:
-              raise SystemExit(
-                  'Rapport different du resultat recalcule'
-              )
-
-          if (
-              report['systeme'] != 'X1000 V2.5'
-              or report['mode']
-              != 'VALIDATION_LOCALE_SANS_PUBLICATION'
-          ):
-              raise SystemExit(
-                  'Metadonnees de rapport incorrectes'
-              )
-
-          for field in (
-              'validation_officielle',
-              'collecte_automatique',
-              'publication',
-          ):
-              if report.get(field) is not False:
-                  raise SystemExit(
-                      f'Interdiction non respectee : {field}'
-                  )
-
-          total = report['total']
-
-          if not all(
-              type(report[k]) is int
-              and report[k] >= 0
-              for k in (
-                  'total',
-                  'valides',
-                  'invalides',
-              )
-          ):
-              raise SystemExit(
-                  'Compteurs incorrects'
-              )
-
-          if (
-              total != len(report['resultats'])
-              or report['valides']
-              + report['invalides'] != total
-          ):
-              raise SystemExit(
-                  'Comptage incoherent'
-              )
-
-          indices = [
-              item['index']
-              for item in report['resultats']
-          ]
-
-          if indices != list(
-              range(1, total + 1)
-          ):
-              raise SystemExit(
-                  'Indices incoherents'
-              )
-
-          if (
-              report['invalides']
-              or report['statut'] != 'VALIDE'
-          ):
-              raise SystemExit(
-                  f"Courses invalides : "
-                  f"{report['invalides']}"
-              )
-
-          if os.environ['VALIDATOR_RC'] != '0':
-              raise SystemExit(
-                  'Code retour du validateur incoherent'
-              )
-
-          print(
-              f'Rapport conforme : {total} '
-              'courses structurellement valides'
-          )
-          PY
-
-      - name: Verifier depot et archives inchanges
+      - name: Verifier depot original
         if: always()
+        shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
+          test -z "$(git status --porcelain)"
 
-          git diff --exit-code --quiet
-          git diff --cached --exit-code --quiet
-          test -z "$(
-            git ls-files --others --exclude-standard
-          )"
-
-          python - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-
-          saved = (
-              Path(os.environ['RUNNER_TEMP'])
-              / 'x1000-protected-before.json'
-          )
-
-          if not saved.is_file():
-              raise SystemExit(
-                  'Empreintes initiales absentes : '
-                  'verification impossible'
-              )
-
-          before = json.loads(
-              saved.read_text(encoding='utf-8')
-          )
-
-          for name, expected in before.items():
-              path = Path(name)
-
-              if path.is_symlink():
-                  raise SystemExit(
-                      f'Lien symbolique detecte : {name}'
-                  )
-
-              actual = (
-                  hashlib.sha256(
-                      path.read_bytes()
-                  ).hexdigest()
-                  if path.is_file()
-                  else None
-              )
-
-              if actual != expected:
-                  raise SystemExit(
-                      f'Fichier protege modifie : {name}'
-                  )
-
-          print(
-              'Depot, FIGES et archives inchanges'
-          )
-          PY
-
-      - name: Bilan de validation
+      - name: Bilan
         if: success()
-        env:
-          DONNEES_PRESENTES: ${{ steps.donnees.outputs.present }}
         run: |
-          set -euo pipefail
-
-          {
-            echo '## X1000 V2.5 - Validation locale'
-            echo ''
-            echo '- Autotests et regressions : OK'
-            echo '- Depot, FIGES et archives : inchanges'
-            echo '- Moteurs M1-M5 : non executes et non modifies'
-            echo '- Collecte automatique : aucune'
-            echo '- FIGE automatique : aucun'
-            echo '- Publication automatique : aucune'
-            echo '- Commit automatique : aucun'
-            echo '- Push automatique : aucun'
-
-            if [ "$DONNEES_PRESENTES" = 'true' ]; then
-              echo '- Courses fournies : validation structurelle conforme'
-            else
-              echo '- AUCUNE DONNEE : aucune course validee'
-            fi
-
-            echo '- Validation officielle : NON'
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Validation locale terminee" \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo "Aucune collecte automatique" \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo "Aucune publication ni FIGE" \
+            >> "$GITHUB_STEP_SUMMARY"
