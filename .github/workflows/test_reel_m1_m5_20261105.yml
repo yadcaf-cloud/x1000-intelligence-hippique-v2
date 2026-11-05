@@ -1,0 +1,268 @@
+name: X1000 - Test reel M1-M5 - 05 novembre 2026
+
+run-name: X1000 - Controle historique sans publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      fichier_course:
+        description: "Fichier JSON de course historique sourcee"
+        required: true
+        default: "tests/donnees_reelles/2026-11-05-R1-C1.json"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x1000-test-historique-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  controle-historique:
+    name: Diagnostic M1-M5 en lecture seule
+    runs-on: ubuntu-24.04
+
+    timeout-minutes: 10
+
+    env:
+      TZ: Europe/Paris
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONNOUSERSITE: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: ""
+      PYTHONSAFEPATH: "1"
+      FICHIER_COURSE: ${{ inputs.fichier_course }}
+
+    steps:
+      - name: Verifier branche autorisee
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REF" = \
+            "refs/heads/fix/x1000-v2-reparation-controlee"
+
+      - name: Checkout sans publication
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Installer Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Controle technique et documentaire
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          python -B - <<'PY'
+          import ast
+          import json
+          import os
+          import re
+          from pathlib import Path
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+
+          racine = Path.cwd().resolve()
+          moteurs = [f"M{i}" for i in range(1, 6)]
+
+          print("=== X1000 : CONTROLE M1-M5 ===")
+          print("Date historique : 2026-11-05")
+          print("Mode : lecture seule")
+          print("Aucun FIGE, aucune publication")
+
+          # Controle des fichiers Python sans les executer.
+          fichiers = [
+              "m1.py", "m2.py", "m3.py",
+              "m4.py", "m5.py",
+              "validation_moteurs.py",
+              "coordination_x1000.py",
+              "moteurs/noyau_commun.py",
+          ]
+
+          for nom in fichiers:
+              chemin = racine / nom
+              if not chemin.is_file() or chemin.is_symlink():
+                  raise SystemExit(f"Fichier absent : {nom}")
+              if chemin.stat().st_size > 1024 * 1024:
+                  raise SystemExit(f"Fichier trop volumineux : {nom}")
+              ast.parse(
+                  chemin.read_text(encoding="utf-8-sig"),
+                  filename=nom,
+              )
+              print(f"SYNTAXE OK : {nom}")
+
+          # Les moteurs ne sont pas executes sur des
+          # courses deja terminees.
+          brut = os.environ["FICHIER_COURSE"]
+          relatif = Path(brut)
+
+          if (
+              relatif.is_absolute()
+              or ".." in relatif.parts
+              or relatif.suffix != ".json"
+              or not relatif.parts
+              or relatif.parts[0] != "tests"
+          ):
+              raise SystemExit(
+                  "Chemin JSON interdit : utiliser tests/..."
+              )
+
+          chemin = (racine / relatif).resolve()
+
+          if not chemin.is_relative_to(racine / "tests"):
+              raise SystemExit("Chemin hors du dossier tests")
+
+          if not chemin.is_file():
+              raise SystemExit(
+                  "DONNEES ABSENTES : " + str(relatif)
+                  + "\nAjouter d'abord le JSON source."
+              )
+
+          if chemin.stat().st_size > 1024 * 1024:
+              raise SystemExit("JSON trop volumineux")
+
+          course = json.loads(
+              chemin.read_text(encoding="utf-8-sig")
+          )
+
+          if not isinstance(course, dict):
+              raise SystemExit("Objet course JSON invalide")
+
+          identifiant = course.get("id")
+          if not isinstance(identifiant, str):
+              raise SystemExit("Identifiant absent")
+
+          if not re.fullmatch(
+              r"2026-11-05-R[1-9][0-9]*-C[1-9][0-9]*",
+              identifiant,
+          ):
+              raise SystemExit("Identifiant historique incorrect")
+
+          depart = datetime.fromisoformat(
+              course["depart"].replace("Z", "+00:00")
+          )
+
+          if depart.tzinfo is None:
+              raise SystemExit("Fuseau du depart absent")
+
+          if (
+              depart.astimezone(
+                  ZoneInfo("Europe/Paris")
+              ).date().isoformat() != "2026-11-05"
+          ):
+              raise SystemExit("Date locale incoherente")
+
+          sources = course.get("sources")
+          if (
+              not isinstance(sources, list)
+              or not sources
+              or not all(
+                  isinstance(s, str)
+                  and s.startswith("https://")
+                  for s in sources
+              )
+          ):
+              raise SystemExit(
+                  "Sources HTTPS documentaires requises"
+              )
+
+          partants = course.get("partants")
+          if not isinstance(partants, list):
+              raise SystemExit("Partants manquants")
+
+          numeros = set()
+          actifs = set()
+          non_partants = set()
+
+          for cheval in partants:
+              if not isinstance(cheval, dict):
+                  raise SystemExit("Fiche cheval invalide")
+
+              numero = cheval.get("numero")
+              nom = cheval.get("nom")
+              np = cheval.get("non_partant")
+
+              if (
+                  type(numero) is not int
+                  or numero <= 0
+                  or numero in numeros
+                  or not isinstance(nom, str)
+                  or not nom.strip()
+                  or type(np) is not bool
+              ):
+                  raise SystemExit("Partant incoherent")
+
+              numeros.add(numero)
+              if np:
+                  non_partants.add(numero)
+              else:
+                  actifs.add(numero)
+
+          if len(actifs) < 5:
+              raise SystemExit("Moins de cinq partants actifs")
+
+          if course.get("nombre_partants") != len(actifs):
+              raise SystemExit("Nombre de partants incoherent")
+
+          liste_np = course.get("non_partants")
+          if (
+              not isinstance(liste_np, list)
+              or any(type(n) is not int for n in liste_np)
+              or len(liste_np) != len(set(liste_np))
+              or set(liste_np) != non_partants
+          ):
+              raise SystemExit("Non-partants incoherents")
+
+          print("COURSE :", identifiant)
+          print("PARTANTS ACTIFS :", len(actifs))
+          print("NON-PARTANTS :", sorted(non_partants))
+          print("SOURCES DECLAREES :", len(sources))
+          print(
+              "ATTENTION : sources non consultees "
+              "automatiquement."
+          )
+
+          # Ne jamais transformer une arrivee connue
+          # en prediction historique.
+          for moteur in moteurs:
+              print(
+                  f"{moteur} : syntaxe OK ; "
+                  "prediction historique non executee"
+              )
+
+          print("=== BILAN ===")
+          print("Controle documentaire structurel : OK")
+          print("Authenticite externe : non certifiee")
+          print("Predictions M1-M5 : non executees")
+          print("FIGE : aucun")
+          print("Publication : aucune")
+          print("Archives : aucune modification")
+          PY
+
+      - name: Verifier absence de modifications
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=== INTEGRITE DU DEPOT ==="
+
+          git diff --exit-code
+          git diff --cached --exit-code
+
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "ERREUR : fichiers modifies ou crees"
+            git status --short
+            exit 1
+          fi
+
+          echo "Depot original inchange"
+          echo "Aucun commit"
+          echo "Aucun push"
+          echo "Aucune publication"
+          echo "Aucune archive modifiee"
