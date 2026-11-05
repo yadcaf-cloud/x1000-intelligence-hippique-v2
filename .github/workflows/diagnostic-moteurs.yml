@@ -1,6 +1,6 @@
-name: X1000 V2.5 - Diagnostic securise M1 a M5
+name: X1000 - Diagnostic securise M1-M5
 
-run-name: Diagnostic controle sans publication
+run-name: Diagnostic sans publication
 
 on:
   workflow_dispatch:
@@ -8,16 +8,16 @@ on:
     branches:
       - fix/x1000-v2-reparation-controlee
     paths:
+      - "moteurs/**"
       - "m1.py"
       - "m2.py"
       - "m3.py"
       - "m4.py"
       - "m5.py"
       - "noyau_commun.py"
-      - "moteurs/**"
       - "validation_moteurs.py"
-      - "test_validation_moteurs.py"
       - "coordination_x1000.py"
+      - "test_validation_moteurs.py"
       - "test_coordination_x1000.py"
       - ".github/workflows/diagnostic-moteurs.yml"
 
@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   diagnostic:
-    name: Verification securisee M1-M5
+    if: github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
@@ -40,146 +40,93 @@ jobs:
       PYTHONNOUSERSITE: "1"
       PYTHONUNBUFFERED: "1"
 
+    defaults:
+      run:
+        shell: bash
+
     steps:
-      - name: Recuperer la branche
-        uses: actions/checkout@v6
+      - name: Checkout sans identifiants persistants
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Installer Python 3.11
-        uses: actions/setup-python@v6
+      - name: Installer Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Controler la branche
-        shell: bash
+      - name: Verifier la branche
         run: |
           set -Eeuo pipefail
+          test "$GITHUB_REF_NAME" = \
+            "fix/x1000-v2-reparation-controlee"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
-          BRANCH="${GITHUB_REF_NAME}"
-
-          if [[ "$BRANCH" != \
-            "fix/x1000-v2-reparation-controlee" ]]; then
-            echo "::error::Branche non autorisee"
-            exit 1
-          fi
-
-          python --version
-          echo "Branche autorisee : $BRANCH"
-
-      - name: Verifier les fichiers obligatoires
-        shell: bash
+      - name: Verifier syntaxe et fichiers
         run: |
           set -Eeuo pipefail
-
-          fichiers=(
-            m1.py
-            m2.py
-            m3.py
-            m4.py
-            m5.py
-            noyau_commun.py
-            moteurs/noyau_commun.py
-            validation_moteurs.py
-            test_validation_moteurs.py
-            coordination_x1000.py
-            test_coordination_x1000.py
-          )
-
-          for fichier in "${fichiers[@]}"; do
-            if [[ ! -f "$fichier" ]]; then
-              echo "::error::Fichier absent : $fichier"
-              exit 1
-            fi
-            echo "OK : $fichier"
-          done
-
-      - name: Verifier la syntaxe Python
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
           python -B - <<'PY'
           import ast
           from pathlib import Path
 
-          fichiers = [
-              "m1.py",
-              "m2.py",
-              "m3.py",
-              "m4.py",
-              "m5.py",
+          files = [
+              "m1.py", "m2.py", "m3.py",
+              "m4.py", "m5.py",
               "noyau_commun.py",
               "moteurs/noyau_commun.py",
               "validation_moteurs.py",
-              "test_validation_moteurs.py",
               "coordination_x1000.py",
+              "test_validation_moteurs.py",
               "test_coordination_x1000.py",
           ]
 
-          for nom in fichiers:
-              chemin = Path(nom)
-              contenu = chemin.read_text(
-                  encoding="utf-8-sig"
+          for name in files:
+              path = Path(name)
+              if not path.is_file() or path.is_symlink():
+                  raise SystemExit(
+                      f"Fichier absent ou interdit: {name}"
+                  )
+              if path.stat().st_size > 1024 * 1024:
+                  raise SystemExit(
+                      f"Fichier trop volumineux: {name}"
+                  )
+              ast.parse(
+                  path.read_text(encoding="utf-8-sig"),
+                  filename=name
               )
-              ast.parse(contenu, filename=nom)
-              print("SYNTAXE OK :", nom)
-
-          print("Controle syntaxique termine")
+              print("SYNTAXE OK:", name)
           PY
 
-      - name: Preparer environnement temporaire
-        shell: bash
+      - name: Creer copie temporaire
         run: |
           set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/x1000-isole"
+          git archive HEAD | tar -xf - \
+            -C "$RUNNER_TEMP/x1000-isole"
 
-          mkdir -p "$RUNNER_TEMP/x1000-tests"
-
-          git archive HEAD | tar -x \
-            -C "$RUNNER_TEMP/x1000-tests"
-
-          echo "Copie temporaire preparee"
-          echo "Depot original non modifie"
-
-      - name: Executer tests dans copie temporaire
-        shell: bash
+      - name: Executer tests isoles
         run: |
           set -Eeuo pipefail
-
-          cd "$RUNNER_TEMP/x1000-tests"
-
+          cd "$RUNNER_TEMP/x1000-isole"
           python -B test_validation_moteurs.py
           python -B test_coordination_x1000.py
 
-          echo "Tests termines avec succes"
-
-      - name: Controler integrite du depot
+      - name: Verifier depot original
         if: always()
-        shell: bash
         run: |
           set -Eeuo pipefail
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain)"
 
-          echo "Controle des modifications"
-
-          git status --short
-
-          if [[ -n "$(git status --porcelain)" ]]; then
-            echo "::error::Depot modifie"
-            exit 1
-          fi
-
-          echo "Depot original inchange"
-
-      - name: Bilan final
+      - name: Bilan
         if: success()
-        shell: bash
         run: |
-          echo "X1000 - DIAGNOSTIC REUSSI"
-          echo "M1 a M5 : syntaxe controlee"
-          echo "Tests de validation executes"
-          echo "Tests de coordination executes"
-          echo "Aucune publication par le workflow"
-          echo "Aucun commit ni push"
-          echo "Aucun FIGE automatique"
-          echo "Aucun deploiement"
-          echo "Depot original inchange"
+          {
+            echo "## X1000 - Diagnostic reussi"
+            echo "- Tests M1-M5 executes"
+            echo "- Aucune publication"
+            echo "- Aucun FIGE automatique"
+            echo "- Aucune modification du depot"
+            echo "- Aucun deploiement"
+          } >> "$GITHUB_STEP_SUMMARY"
