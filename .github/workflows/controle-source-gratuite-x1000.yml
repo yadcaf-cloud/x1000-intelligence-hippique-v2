@@ -1,0 +1,62 @@
+name: X1000 - Controle source gratuite
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONNOUSERSITE: "1"
+      X1000_READ_ONLY: "1"
+      X1000_NO_FIGE: "1"
+      X1000_NO_PUBLICATION: "1"
+
+    steps:
+      - name: Recuperer la branche
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verifier la branche
+        run: |
+          test "$GITHUB_REF_NAME" = \
+            "fix/x1000-v2-reparation-controlee"
+
+      - name: Tester Open PMU API
+        run: |
+          python -B sources/open_pmu_gratuit.py
+
+      - name: Verifier le depot
+        if: always()
+        run: |
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(
+            git ls-files --others --exclude-standard
+          )"
+
+      - name: Bilan
+        if: always()
+        run: |
+          {
+            echo "## X1000 - Source gratuite"
+            echo ""
+            echo "Controle historique uniquement."
+            echo ""
+            echo "- Aucun FIGE"
+            echo "- Aucune publication"
+            echo "- Aucune modification d'archives"
+            echo "- Aucune analyse prospective"
+          } >> "$GITHUB_STEP_SUMMARY"
