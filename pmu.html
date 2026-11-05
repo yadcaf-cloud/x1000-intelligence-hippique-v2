@@ -300,9 +300,8 @@ code { color: var(--blue); }
   <p id="api-help">
     <small>
       Sur GitHub Pages, renseignez l'adresse HTTPS
-      d'un serveur API Python accessible.
-      Cette interface fonctionne uniquement
-      en lecture seule.
+      de votre serveur API Python.
+      Interface exclusivement en lecture seule.
     </small>
   </p>
 </header>
@@ -342,43 +341,31 @@ code { color: var(--blue); }
 
     <article class="panel engine">
       <h3>M1 · Statistiques</h3>
-      <p>
-        Performances, chronos, régularité
-        et opposition.
-      </p>
+      <p>Performances, chronos, régularité et opposition.</p>
       <span class="tag">Non renseigné</span>
     </article>
 
     <article class="panel engine">
       <h3>M2 · Décision autonome</h3>
-      <p>
-        Forces, faiblesses et classement indépendant.
-      </p>
+      <p>Forces, faiblesses et classement indépendant.</p>
       <span class="tag">Non renseigné</span>
     </article>
 
     <article class="panel engine">
       <h3>M3 · Aptitudes</h3>
-      <p>
-        Jockey, driver, terrain et parcours.
-      </p>
+      <p>Jockey, driver, terrain et parcours.</p>
       <span class="tag">Non renseigné</span>
     </article>
 
     <article class="panel engine">
       <h3>M4 · Endurance</h3>
-      <p>
-        Tenue, conditions de course et entourage.
-      </p>
+      <p>Tenue, conditions de course et entourage.</p>
       <span class="tag">Non renseigné</span>
     </article>
 
     <article class="panel engine">
       <h3>M5 · Outsiders</h3>
-      <p>
-        Profils négligés et vigilance
-        sur les faux favoris.
-      </p>
+      <p>Profils négligés et vigilance sur les faux favoris.</p>
       <span class="tag">Non renseigné</span>
     </article>
 
@@ -401,15 +388,11 @@ code { color: var(--blue); }
 
 <section class="panel">
   <h2>FIGÉS avant départ</h2>
-
   <p>
     Les FIGÉS restent consultables sans modification.
-    Une nouvelle version ne peut être créée
-    que par les processus autorisés,
-    avant le départ et avec conservation
-    des versions précédentes.
+    Toute nouvelle version relève exclusivement
+    des processus autorisés avant le départ.
   </p>
-
   <div id="figes" class="empty">
     Aucun FIGÉ chargé.
   </div>
@@ -417,7 +400,6 @@ code { color: var(--blue); }
 
 <section class="panel">
   <h2>Audits et résultats officiels</h2>
-
   <div id="audits" class="empty">
     Aucun audit chargé.
   </div>
@@ -451,16 +433,12 @@ code { color: var(--blue); }
 'use strict';
 
 /*
- * X1000 INTELLIGENCE HIPPIQUE V2
+ * X1000 V2 - INTERFACE SECURISEE
  *
- * Interface de consultation uniquement.
- *
- * - Aucun POST, PUT, PATCH ou DELETE.
- * - Aucune publication de pronostics.
- * - Aucun FIGÉ créé ou modifié.
- * - Aucune archive modifiée.
- * - Aucun moteur activé.
- * - Aucune validation officielle automatique.
+ * Lecture seule.
+ * Aucun POST, PUT, PATCH ou DELETE.
+ * Aucun moteur execute.
+ * Aucun FIGE ou archive modifie.
  */
 
 const $ = id => document.getElementById(id);
@@ -487,41 +465,60 @@ const REQUEST_TIMEOUT = 10000;
 let activeController = null;
 
 /*
- * Validation des collections JSON.
+ * Validation des collections.
+ *
+ * Compatible avec api.py :
+ * {
+ *   disponible: true,
+ *   donnees: [...]
+ * }
+ *
+ * Une source indisponible n'est pas
+ * considérée comme une collection valide.
  */
 function getArray(payload, key) {
-  let items = null;
-
   if (Array.isArray(payload)) {
-    items = payload;
-
-  } else if (
-    payload !== null &&
-    typeof payload === 'object'
-  ) {
-    for (const name of [key, 'items', 'data']) {
-      if (Array.isArray(payload[name])) {
-        items = payload[name];
-        break;
-      }
-    }
+    return payload;
   }
 
-  if (!items) {
+  if (
+    payload === null ||
+    typeof payload !== 'object' ||
+    Array.isArray(payload)
+  ) {
     return null;
   }
 
-  const valid = items.every(item =>
-    item !== null &&
-    typeof item === 'object' &&
-    !Array.isArray(item)
-  );
+  if (payload.disponible === false) {
+    return null;
+  }
 
-  return valid ? items : null;
+  for (const name of [
+    key,
+    'donnees',
+    'items',
+    'data'
+  ]) {
+    const items = payload[name];
+
+    if (!Array.isArray(items)) {
+      continue;
+    }
+
+    const valid = items.every(item =>
+      item !== null &&
+      typeof item === 'object' &&
+      !Array.isArray(item)
+    );
+
+    return valid ? items : null;
+  }
+
+  return null;
 }
 
 /*
- * Affichage sécurisé des valeurs.
+ * Affichage sûr des valeurs JSON.
  */
 function displayValue(value) {
   if (value === null || value === undefined) {
@@ -540,7 +537,7 @@ function displayValue(value) {
 }
 
 /*
- * Messages sans insertion HTML non fiable.
+ * Affichage des messages.
  */
 function showEmpty(id, message) {
   const root = $(id);
@@ -554,15 +551,17 @@ function showEmpty(id, message) {
 
 /*
  * Affichage des tableaux.
+ * Les données API ne sont jamais
+ * injectées avec innerHTML.
  */
-function renderRows(target, items, fields) {
+function renderRows(target, items, columns) {
   const root = $(target);
 
   if (!root) return;
 
   root.replaceChildren();
 
-  if (!items) {
+  if (!Array.isArray(items)) {
     showEmpty(
       target,
       'Format JSON non reconnu.'
@@ -584,7 +583,7 @@ function renderRows(target, items, fields) {
   const thead = document.createElement('thead');
   const headRow = document.createElement('tr');
 
-  for (const [label] of fields) {
+  for (const [label] of columns) {
     const th = document.createElement('th');
     th.textContent = label;
     headRow.append(th);
@@ -598,7 +597,7 @@ function renderRows(target, items, fields) {
   for (const item of items.slice(0, MAX_ROWS)) {
     const tr = document.createElement('tr');
 
-    for (const [, keys] of fields) {
+    for (const [, keys] of columns) {
       const td = document.createElement('td');
 
       const key = keys.find(k =>
@@ -609,9 +608,7 @@ function renderRows(target, items, fields) {
       );
 
       td.textContent = displayValue(
-        key === undefined
-          ? null
-          : item[key]
+        key === undefined ? null : item[key]
       );
 
       tr.append(td);
@@ -669,30 +666,44 @@ function resetEngines() {
 }
 
 /*
- * Identification des moteurs M1 à M5.
+ * Identification fiable de M1 à M5.
  */
 function engineId(item, fallback = '') {
-  if (!item || typeof item !== 'object') {
+  if (
+    !item ||
+    typeof item !== 'object' ||
+    Array.isArray(item)
+  ) {
     return '';
   }
 
-  return String(
-    item.id ??
-    item.nom ??
-    item.name ??
-    item.moteur ??
-    item.engine ??
+  for (const value of [
+    item.moteur,
+    item.engine,
+    item.id,
+    item.nom,
+    item.name,
     fallback
-  ).trim().toUpperCase();
+  ]) {
+    const id = String(value ?? '')
+      .trim()
+      .toUpperCase();
+
+    if (/^M[1-5]$/.test(id)) {
+      return id;
+    }
+  }
+
+  return '';
 }
 
 /*
- * Accepte :
- * - moteurs: [...]
- * - engines: [...]
- * - modules: [...]
- * - moteurs: { M1: {...}, M2: {...} }
- * - moteurs: { M1: "ACTIF", ... }
+ * Formats reconnus :
+ *
+ * moteurs: { M1: {...}, ... }
+ * moteurs: [{ moteur: "M1", ... }]
+ * engines: [...]
+ * modules: [...]
  */
 function extractEngines(source) {
   if (!source || typeof source !== 'object') {
@@ -733,12 +744,12 @@ function extractEngines(source) {
         ) {
           output.push({
             ...value,
-            id: id.toUpperCase()
+            moteur: id.toUpperCase()
           });
 
         } else {
           output.push({
-            id: id.toUpperCase(),
+            moteur: id.toUpperCase(),
             etat: value
           });
         }
@@ -750,21 +761,17 @@ function extractEngines(source) {
 }
 
 /*
- * Mise à jour des cinq moteurs.
- *
- * Le statut affiché provient exclusivement
- * des réponses API.
+ * Mise à jour des moteurs.
+ * Les statuts proviennent uniquement
+ * des réponses réelles de l'API.
  */
 function updateEngines(status, diagnostic) {
   resetEngines();
 
-  const sources = [diagnostic, status];
   const known = new Map();
 
-  for (const source of sources) {
-    const engines = extractEngines(source);
-
-    for (const item of engines) {
+  for (const source of [diagnostic, status]) {
+    for (const item of extractEngines(source)) {
       const id = engineId(item);
 
       if (!/^M[1-5]$/.test(id)) {
@@ -801,7 +808,7 @@ function updateEngines(status, diagnostic) {
 }
 
 /*
- * Validation de l'adresse API.
+ * Validation de l'URL API.
  */
 function getBaseUrl() {
   const raw = $('api').value.trim();
@@ -818,7 +825,7 @@ function getBaseUrl() {
       location.protocol !== 'https:'
     ) {
       throw new Error(
-        'Ouvrez cette page depuis un serveur HTTP ou HTTPS.'
+        'Ouvrez la page depuis un serveur HTTP ou HTTPS.'
       );
     }
 
@@ -850,6 +857,15 @@ function getBaseUrl() {
   }
 
   if (
+    location.protocol === 'https:' &&
+    url.protocol !== 'https:'
+  ) {
+    throw new Error(
+      'Une page HTTPS nécessite une API HTTPS.'
+    );
+  }
+
+  if (
     url.username ||
     url.password ||
     url.search ||
@@ -869,11 +885,22 @@ function getBaseUrl() {
     path = path.slice(0, -4);
   }
 
+  if (
+    path.includes('/../') ||
+    path.endsWith('/..') ||
+    path.includes('/./') ||
+    path.endsWith('/.')
+  ) {
+    throw new Error(
+      'Chemin API non autorisé.'
+    );
+  }
+
   return url.origin + path;
 }
 
 /*
- * Lecture JSON avec contrôle HTTP.
+ * Lecture JSON uniquement par GET.
  */
 async function fetchJson(url, signal) {
   let response;
@@ -938,69 +965,34 @@ const fields = {
     ['Hippodrome', ['hippodrome', 'lieu']],
     [
       'Départ',
-      [
-        'depart',
-        'heure_depart',
-        'date_depart',
-        'depart_at'
-      ]
+      ['depart', 'heure_depart', 'date_depart', 'depart_at']
     ],
     ['Statut', ['statut', 'status']]
   ],
 
   selections: [
-    [
-      'Course',
-      ['course_id', 'cid', 'id_course']
-    ],
-    [
-      'Moteur',
-      ['moteur', 'engine', 'module']
-    ],
+    ['Course', ['course_id', 'cid', 'id_course']],
+    ['Moteur', ['moteur', 'engine', 'module']],
     [
       'Classement',
-      [
-        'ranking',
-        'classement',
-        'positions',
-        'top5'
-      ]
+      ['ranking', 'classement', 'positions', 'top5']
     ],
-    [
-      'Analyse',
-      ['analysis', 'analyse']
-    ]
+    ['Analyse', ['analysis', 'analyse']]
   ],
 
   figes: [
-    [
-      'Course',
-      ['course_id', 'cid']
-    ],
+    ['Course', ['course_id', 'cid']],
     ['Version', ['version']],
-    [
-      'Statut',
-      ['statut', 'status']
-    ],
+    ['Statut', ['statut', 'status']],
     [
       'Horodatage',
-      [
-        'fige_a',
-        'created_at',
-        'verifie_a'
-      ]
+      ['fige_a', 'created_at', 'verifie_a']
     ]
   ],
 
   audits: [
-    [
-      'Course',
-      ['course_id', 'cid']
-    ],
-    [
-      'Arrivée',
-      ['arrival', 'arrivee']
-    ],
+    ['Course', ['course_id', 'cid']],
+    ['Arrivée', ['arrival', 'arrivee']],
     [
       'Source déclarée',
       ['source_officielle', 'source']
@@ -1023,10 +1015,7 @@ function resetCollections(message) {
 }
 
 /*
- * Requête individuelle avec délai maximal.
- *
- * AbortController évite de dépendre
- * de AbortSignal.any().
+ * Requête individuelle avec timeout.
  */
 async function loadEndpoint(base, key, parentSignal) {
   const controller = new AbortController();
@@ -1104,10 +1093,6 @@ async function load() {
 
   $('dot').className = 'dot';
 
-  /*
-   * Éviter les données périmées
-   * pendant une actualisation.
-   */
   resetEngines();
 
   resetCollections(
@@ -1132,10 +1117,6 @@ async function load() {
       )
     );
 
-    /*
-     * Ignorer les réponses d'une ancienne
-     * actualisation annulée.
-     */
     if (
       controller.signal.aborted ||
       activeController !== controller
@@ -1152,10 +1133,6 @@ async function load() {
 
     let validSources = 0;
 
-    /*
-     * Les collections ne sont comptées
-     * que si leur format est reconnu.
-     */
     for (const key of collections) {
       const result = results.find(
         item => item.key === key
@@ -1176,6 +1153,27 @@ async function load() {
         result.data,
         key
       );
+
+      /*
+       * Fichier absent ou illisible.
+       */
+      if (
+        result.data &&
+        result.data.disponible === false
+      ) {
+        $('count-' + key).textContent = '—';
+
+        showEmpty(
+          key,
+          'Source indisponible : ' +
+          String(
+            result.data.raison ??
+            'fichier absent ou illisible'
+          )
+        );
+
+        continue;
+      }
 
       if (items === null) {
         $('count-' + key).textContent = '—';
@@ -1200,10 +1198,6 @@ async function load() {
       );
     }
 
-    /*
-     * Diagnostic des moteurs :
-     * affichage sans activation.
-     */
     updateEngines(
       data.status,
       data.diagnostic
@@ -1242,9 +1236,15 @@ async function load() {
       );
 
     } else {
+      const errors = results
+        .filter(item => item.error !== null)
+        .map(item => `${item.key}: ${item.error}`);
+
       showEmpty(
         'diagnostic',
-        'Aucun diagnostic JSON valide accessible.'
+        errors.length
+          ? errors.join(' | ')
+          : 'Aucun diagnostic JSON valide accessible.'
       );
     }
 
@@ -1272,15 +1272,6 @@ async function load() {
         'API indisponible ou formats invalides';
 
       $('dot').className = 'dot error';
-    }
-
-    if (totalValid === 0) {
-      showEmpty(
-        'diagnostic',
-        'Aucune source JSON valide. Vérifiez ' +
-        'le serveur Python, les routes /api/, ' +
-        'HTTPS et les autorisations CORS.'
-      );
     }
 
   } catch (error) {
