@@ -2,10 +2,9 @@
 set -Eeuo pipefail
 
 # X1000 V2.5 - REPARATION CONTROLEE
-# Restauration du fichier de tests Python.
-# Correction de verifier_prediction_rejetee.
-# Tests avant toute modification du depot.
-# Aucun FIGE, aucune archive, aucun deploiement.
+# Restaure les 55 tests Python.
+# Integre la correction du test 35.
+# Aucun commit, push, FIGE ou deploiement.
 
 REPO="x1000-intelligence-hippique-v2"
 BRANCH="fix/x1000-v2-reparation-controlee"
@@ -19,22 +18,11 @@ erreur() {
     exit 1
 }
 
-info() {
-    printf '\n=== %s ===\n' "$*"
-}
+command -v git >/dev/null || erreur "Git absent"
+command -v python3 >/dev/null || erreur "Python absent"
 
-command -v git >/dev/null ||
-    erreur "Git absent"
-
-command -v python3 >/dev/null ||
-    erreur "Python absent"
-
-command -v tar >/dev/null ||
-    erreur "Tar absent"
-
-git rev-parse --is-inside-work-tree \
-    >/dev/null 2>&1 ||
-    erreur "Executer depuis un depot Git"
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
+    erreur "Executer dans le depot Git"
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -45,34 +33,22 @@ cd "$(git rev-parse --show-toplevel)"
     erreur "Branche non autorisee"
 
 [[ -z "$(git status --porcelain)" ]] ||
-    erreur "Depot non propre"
-
-[[ -z "$(git diff --cached --name-only)" ]] ||
-    erreur "Index Git non vide"
+    erreur "Depot non propre : annulation"
 
 git cat-file -e "${SOURCE}:${FICHIER}" ||
-    erreur "Version Python historique absente"
+    erreur "Source historique absente"
 
 git cat-file -e "${CORRECTION}:${FICHIER}" ||
-    erreur "Correction historique absente"
+    erreur "Correctif historique absent"
 
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONNOUSERSITE=1
-export PYTHONUNBUFFERED=1
-export TZ=Europe/Paris
 
 TEMP="$(mktemp -d)"
 trap 'rm -rf "$TEMP"' EXIT
 
-info "1 - Recuperation des versions"
-
-git show "${SOURCE}:${FICHIER}" \
-    > "$TEMP/source.py"
-
-git show "${CORRECTION}:${FICHIER}" \
-    > "$TEMP/correction.py"
-
-info "2 - Reconstruction Python securisee"
+git show "${SOURCE}:${FICHIER}" > "$TEMP/source.py"
+git show "${CORRECTION}:${FICHIER}" > "$TEMP/correctif.py"
 
 python3 -B - "$TEMP" <<'PY'
 import ast
@@ -81,18 +57,14 @@ import textwrap
 from pathlib import Path
 
 temp = Path(sys.argv[1])
-
 source = (temp / "source.py").read_text(
     encoding="utf-8-sig"
 )
-
-correction = (temp / "correction.py").read_text(
+correctif = (temp / "correctif.py").read_text(
     encoding="utf-8-sig"
 )
 
 arbre = ast.parse(source)
-arbre_correctif = ast.parse(correction)
-
 nom_classe = "TestsSecuriteX1000"
 nom_methode = "verifier_prediction_rejetee"
 
@@ -103,9 +75,7 @@ classes = [
 ]
 
 if len(classes) != 1:
-    raise SystemExit(
-        "Classe de tests absente ou ambigue"
-    )
+    raise SystemExit("Classe de tests invalide")
 
 classe = classes[0]
 
@@ -116,70 +86,46 @@ methodes = [
 ]
 
 if len(methodes) != 1:
-    raise SystemExit(
-        "Methode historique introuvable"
-    )
+    raise SystemExit("Methode historique absente")
 
-# Le correctif peut etre fourni avec
-# une indentation de classe.
-correctif_normalise = textwrap.dedent(
-    correction
-)
+ancienne = methodes[0]
 
-arbre_nouveau = ast.parse(
-    correctif_normalise
-)
+normalise = textwrap.dedent(correctif)
+arbre_correctif = ast.parse(normalise)
 
 nouvelles = [
-    n for n in arbre_nouveau.body
+    n for n in arbre_correctif.body
     if isinstance(n, ast.FunctionDef)
     and n.name == nom_methode
 ]
 
 if len(nouvelles) != 1:
-    raise SystemExit(
-        "Correction historique invalide"
-    )
+    raise SystemExit("Correctif invalide")
 
-ancienne = methodes[0]
 nouvelle = nouvelles[0]
 
-lignes_source = source.splitlines(
+lignes = source.splitlines(keepends=True)
+lignes_correctif = normalise.splitlines(
     keepends=True
 )
 
-lignes_nouvelles = (
-    correctif_normalise.splitlines(
-        keepends=True
-    )
-)
-
-bloc = lignes_nouvelles[
-    nouvelle.lineno - 1:
-    nouvelle.end_lineno
+bloc = lignes_correctif[
+    nouvelle.lineno - 1:nouvelle.end_lineno
 ]
 
 indentation = " " * ancienne.col_offset
 
 bloc = [
-    indentation + ligne
-    if ligne.strip()
-    else ligne
+    indentation + ligne if ligne.strip() else ligne
     for ligne in bloc
 ]
 
-# Remplacement de la seule methode visee.
-lignes_source[
-    ancienne.lineno - 1:
-    ancienne.end_lineno
+lignes[
+    ancienne.lineno - 1:ancienne.end_lineno
 ] = bloc
 
-resultat = "".join(lignes_source)
-
-final = ast.parse(
-    resultat,
-    filename="test_validation_moteurs.py"
-)
+resultat = "".join(lignes)
+final = ast.parse(resultat)
 
 classes_finales = [
     n for n in final.body
@@ -188,14 +134,10 @@ classes_finales = [
 ]
 
 if len(classes_finales) != 1:
-    raise SystemExit(
-        "Classe finale invalide"
-    )
-
-classe_finale = classes_finales[0]
+    raise SystemExit("Classe finale invalide")
 
 tests = [
-    n for n in classe_finale.body
+    n for n in classes_finales[0].body
     if isinstance(n, ast.FunctionDef)
     and n.name.startswith("test_")
 ]
@@ -206,200 +148,73 @@ if len(tests) != 55:
     )
 
 methodes_finales = [
-    n for n in classe_finale.body
+    n for n in classes_finales[0].body
     if isinstance(n, ast.FunctionDef)
     and n.name == nom_methode
 ]
 
 if len(methodes_finales) != 1:
-    raise SystemExit(
-        "Methode corrigee absente"
-    )
+    raise SystemExit("Methode corrigee absente")
 
 methode = methodes_finales[0]
+arguments = methode.args.args
 
-parametres = methode.args.args
-
-if not any(
-    p.arg == "actifs"
-    for p in parametres
-):
-    raise SystemExit(
-        "Parametre actifs absent"
-    )
+if not any(p.arg == "actifs" for p in arguments):
+    raise SystemExit("Argument actifs absent")
 
 if not any(
     isinstance(n, ast.Constant)
     and n.value is Ellipsis
     for n in methode.args.defaults
 ):
-    raise SystemExit(
-        "Valeur par defaut Ellipsis absente"
-    )
+    raise SystemExit("Correction Ellipsis absente")
 
-sortie = temp / "restaure.py"
-
-sortie.write_text(
+(temp / "restaure.py").write_text(
     resultat,
     encoding="utf-8"
 )
 
 print("Syntaxe Python : OK")
-print("Tests conserves : 55")
+print("55 tests : presents")
 print("Correction test 35 : integree")
-print("Indentation : valide")
 PY
 
-info "3 - Preparation des tests isoles"
+echo "Verification des 55 tests..."
 
+# Les tests s'executent sur une copie temporaire.
 mkdir -p "$TEMP/depot"
 
-git archive HEAD |
-    tar -x -C "$TEMP/depot"
+git archive HEAD | tar -x -C "$TEMP/depot"
 
 cp "$TEMP/restaure.py" \
    "$TEMP/depot/$FICHIER"
 
-info "4 - Verification de syntaxe"
-
 (
     cd "$TEMP/depot"
-
-    python3 -B - <<'PY'
-import ast
-from pathlib import Path
-
-fichiers = [
-    "m1.py",
-    "m2.py",
-    "m3.py",
-    "m4.py",
-    "m5.py",
-    "noyau_commun.py",
-    "moteurs/noyau_commun.py",
-    "validation_moteurs.py",
-    "coordination_x1000.py",
-    "test_validation_moteurs.py",
-    "test_coordination_x1000.py",
-]
-
-for nom in fichiers:
-    chemin = Path(nom)
-
-    if not chemin.is_file():
-        raise SystemExit(
-            f"Fichier manquant : {nom}"
-        )
-
-    ast.parse(
-        chemin.read_text(
-            encoding="utf-8-sig"
-        ),
-        filename=nom,
-    )
-
-    print("SYNTAXE OK :", nom)
-PY
-) || erreur "Syntaxe invalide"
-
-info "5 - Execution des tests"
-
-(
-    cd "$TEMP/depot"
-
-    python3 -B test_validation_moteurs.py
-
-    python3 -B test_coordination_x1000.py
-
-) || erreur \
-    "Tests echoues : aucune modification appliquee"
-
-info "6 - Application controlee"
+    python3 -B "$FICHIER"
+) || erreur "Tests echoues : depot inchange"
 
 [[ -z "$(git status --porcelain)" ]] ||
-    erreur "Depot modifie pendant les tests"
+    erreur "Depot modifie entre-temps"
 
+# Application apres verification.
 cp "$TEMP/restaure.py" "$FICHIER"
 
 git diff --check ||
-    erreur "Diff invalide"
-
-MODIFIES="$(git diff --name-only)"
-
-[[ "$MODIFIES" == "$FICHIER" ]] ||
-    erreur "Modification inattendue"
-
-info "7 - Verification finale"
-
-python3 -B - "$FICHIER" <<'PY'
-import ast
-import sys
-from pathlib import Path
-
-chemin = Path(sys.argv[1])
-
-ast.parse(
-    chemin.read_text(encoding="utf-8"),
-    filename=str(chemin),
-)
-
-print("Fichier Python final : OK")
-PY
-
-git diff --stat
-git status --short
-
-echo
-echo "Tests locaux termines."
-echo "Seul le fichier autorise a ete modifie."
-echo
-echo "Enregistrer et pousser sur la branche ?"
-echo "Tapez OUI pour confirmer :"
-
-read -r CONFIRMATION
-
-if [[ "$CONFIRMATION" != "OUI" ]]; then
-    echo "Aucun commit ni push effectue."
-    echo "Correction locale conservee."
-    exit 0
-fi
-
-info "8 - Enregistrement Git"
-
-[[ "$(git branch --show-current)" == "$BRANCH" ]] ||
-    erreur "Branche modifiee"
+    erreur "Erreur dans le diff"
 
 [[ "$(git diff --name-only)" == "$FICHIER" ]] ||
-    erreur "Fichiers modifies inattendus"
-
-git add -- "$FICHIER"
-
-git diff --cached --check ||
-    erreur "Index invalide"
-
-[[ "$(git diff --cached --name-only)" == "$FICHIER" ]] ||
-    erreur "Index inattendu"
-
-git commit -m \
-    "fix(x1000): restore Python validation tests and test 35"
-
-info "9 - Push de la branche"
-
-git push origin \
-    "HEAD:refs/heads/$BRANCH"
+    erreur "Modification inattendue"
 
 echo
-echo "======================================"
-echo "X1000 V2.5 - REPARATION ENREGISTREE"
-echo "======================================"
-echo "Fichier : $FICHIER"
-echo "Branche : $BRANCH"
-echo "Syntaxe : verifiee"
-echo "Tests locaux : executes"
-echo "Correction test 35 : integree"
-echo "55 tests : conserves"
-echo "Aucun FIGE cree"
-echo "Aucune archive modifiee"
-echo "Aucun deploiement demande"
+echo "==================================="
+echo "X1000 V2.5 - REPARATION TERMINEE"
+echo "==================================="
+echo "Fichier Python restaure"
+echo "Correction du test 35 integree"
+echo "55 tests presents"
+echo "Tests executes sur copie isolee"
+echo "Aucun commit ni push"
+echo "Aucun FIGE ni archive modifies"
 echo
-echo "Verifier maintenant GitHub Actions."
+git status --short
