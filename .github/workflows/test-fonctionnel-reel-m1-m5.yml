@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   diagnostic:
-    name: X1000 M1-M5 - lecture seule
+    name: X1000 - Technique et reel separes
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
@@ -50,8 +50,8 @@ jobs:
           test "$GITHUB_REF_NAME" = \
             "fix/x1000-v2-reparation-controlee"
 
-          for f in m1 m2 m3 m4 m5; do
-            test -f "moteurs/$f.py"
+          for m in m1 m2 m3 m4 m5; do
+            test -f "moteurs/$m.py"
           done
 
           test -f moteurs/noyau_commun.py
@@ -59,136 +59,153 @@ jobs:
 
           echo "Branche et fichiers verifies"
 
-      - name: Verifier les courses attestees
+      - name: Autotests techniques M1 a M5
+        id: technique
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -B - <<'PY'
+          import os
+          import tempfile
+          from tests.test_fonctionnel_reel_m1_m5 import (
+              protection,
+              tester_moteurs,
+          )
+
+          with tempfile.TemporaryDirectory() as dossier:
+              os.chdir(dossier)
+              with protection():
+                  resultats = tester_moteurs()
+
+          if resultats:
+              raise SystemExit(
+                  "Autotests : resultat inattendu"
+              )
+
+          print("AUTOTESTS TECHNIQUES : REUSSIS")
+          PY
+
+          echo "statut=REUSSIS" >> "$GITHUB_OUTPUT"
+
+      - name: Detecter les courses attestees
         id: courses
         shell: bash
         run: |
           set -euo pipefail
 
           python -B - <<'PY'
-          import json
           import os
           from pathlib import Path
 
           dossier = Path("tests/donnees_reelles")
           fichiers = sorted(dossier.glob("*.json"))
 
+          with open(
+              os.environ["GITHUB_OUTPUT"],
+              "a",
+              encoding="utf-8",
+          ) as sortie:
+              sortie.write(
+                  f"nombre={len(fichiers)}\n"
+              )
+              sortie.write(
+                  "presentes="
+                  + ("true" if fichiers else "false")
+                  + "\n"
+              )
+
           if not fichiers:
               print(
-                  "::notice::Aucune course reelle "
-                  "attestee disponible."
+                  "::notice::Tests reels NON EXECUTES : "
+                  "aucune fixture disponible."
               )
-              print(
-                  "Les autotests techniques seront "
-                  "executes sans courses reelles."
-              )
-              with open(
-                  os.environ["GITHUB_OUTPUT"],
-                  "a",
-                  encoding="utf-8",
-              ) as sortie:
-                  sortie.write("courses=absentes\n")
           else:
-              for fichier in fichiers:
-                  data = json.loads(
-                      fichier.read_text(encoding="utf-8")
-                  )
-                  if not isinstance(data, dict):
-                      raise SystemExit(
-                          "Structure JSON invalide"
-                      )
-
-                  preuve = data.get("preuve")
-                  course = data.get("course")
-
-                  if not isinstance(preuve, dict):
-                      raise SystemExit(
-                          "Preuve invalide"
-                      )
-                  if not isinstance(course, dict):
-                      raise SystemExit(
-                          "Course invalide"
-                      )
-
-                  if preuve.get(
-                      "verification_humaine"
-                  ) is not True:
-                      raise SystemExit(
-                          "Verification humaine absente"
-                      )
-
-                  url = preuve.get("source_url")
-                  if (
-                      not isinstance(url, str)
-                      or not url.startswith("https://")
-                  ):
-                      raise SystemExit(
-                          "Source HTTPS manquante"
-                      )
-
-                  if course.get(
-                      "localisation_france_verifiee"
-                  ) is not True:
-                      raise SystemExit(
-                          "Localisation France non verifiee"
-                      )
-
-                  if course.get(
-                      "depart_verifie"
-                  ) is not True:
-                      raise SystemExit(
-                          "Depart non verifie"
-                      )
-
-                  print(
-                      "Fixture declaree attestee :",
-                      fichier.name
-                  )
-
-              with open(
-                  os.environ["GITHUB_OUTPUT"],
-                  "a",
-                  encoding="utf-8",
-              ) as sortie:
-                  sortie.write("courses=presentes\n")
-
-              print("Nombre de courses :", len(fichiers))
+              print(
+                  "Fixtures trouvees :", len(fichiers)
+              )
           PY
 
-      - name: Tester M1 a M5
+      - name: Tester les courses reelles M1 a M5
+        id: reel
+        if: steps.courses.outputs.presentes == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          python -B tests/test_fonctionnel_reel_m1_m5.py
 
-      - name: Bilan du diagnostic
-        if: success()
-        shell: bash
-        env:
-          COURSES: ${{ steps.courses.outputs.courses }}
-        run: |
-          set -euo pipefail
+          python -B - <<'PY'
+          import os
+          import tempfile
+          from pathlib import Path
+          from tests.test_fonctionnel_reel_m1_m5 import (
+              FIXTURES,
+              MOTEURS,
+              charger_fixture,
+              protection,
+              tester_moteurs,
+          )
 
-          {
-            echo "## X1000 - Diagnostic M1 a M5"
-            echo ""
-            echo "Branche de reparation uniquement."
-            echo ""
-            echo "- Lecture seule : active"
-            echo "- FIGE : interdit"
-            echo "- Publication : interdite"
-            echo "- Collecte PMU : aucune dans ce workflow"
-            echo ""
-            if [[ "$COURSES" == "presentes" ]]; then
-              echo "Courses : tests executes sur fixtures."
-              echo "Sources a verifier independamment."
-            else
-              echo "Courses reelles : NON TESTEES."
-              echo "Autotests techniques uniquement."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          fichiers = sorted(FIXTURES.glob("*.json"))
+          if not fichiers:
+              raise SystemExit("Aucune course reelle")
+
+          analyses = 0
+
+          with tempfile.TemporaryDirectory() as dossier:
+              os.chdir(dossier)
+
+              with protection():
+                  for fichier in fichiers:
+                      course, actifs = charger_fixture(
+                          fichier
+                      )
+
+                      resultats = tester_moteurs(
+                          course, actifs
+                      )
+
+                      if set(resultats) != set(MOTEURS):
+                          raise SystemExit(
+                              "Moteurs incomplets"
+                          )
+
+                      for nom in MOTEURS:
+                          statut = resultats[nom]["statut"]
+                          if statut != "ANALYSE_DISPONIBLE":
+                              raise SystemExit(
+                                  f"{nom} : {statut}"
+                              )
+                          analyses += 1
+
+                      print(
+                          "COURSE VALIDEE :", fichier.name
+                      )
+
+          attendu = len(fichiers) * len(MOTEURS)
+
+          if analyses != attendu:
+              raise SystemExit(
+                  "Nombre d'analyses incorrect"
+              )
+
+          print(
+              "ANALYSES REELLES REUSSIES :",
+              analyses
+          )
+
+          with open(
+              os.environ["GITHUB_OUTPUT"],
+              "a",
+              encoding="utf-8",
+          ) as sortie:
+              sortie.write("statut=REUSSIS\n")
+              sortie.write(
+                  f"analyses={analyses}\n"
+              )
+          PY
 
       - name: Verifier absence de modifications
+        id: integrite
         if: always()
         shell: bash
         run: |
@@ -202,4 +219,50 @@ jobs:
           )"
 
           echo "Depot de travail intact"
-          echo "Controle de modifications termine"
+
+      - name: Bilan final X1000
+        if: always()
+        shell: bash
+        env:
+          TECHNIQUE: ${{ steps.technique.outcome }}
+          COURSES: ${{ steps.courses.outputs.nombre }}
+          PRESENTES: ${{ steps.courses.outputs.presentes }}
+          REEL: ${{ steps.reel.outcome }}
+          ANALYSES: ${{ steps.reel.outputs.analyses }}
+          INTEGRITE: ${{ steps.integrite.outcome }}
+        run: |
+          {
+            echo "## X1000 - Bilan M1 a M5"
+            echo ""
+            echo "| Controle | Resultat |"
+            echo "|---|---|"
+            echo "| Autotests techniques | $TECHNIQUE |"
+            echo "| Fixtures detectees | ${COURSES:-0} |"
+            echo "| Tests reels | $REEL |"
+            echo "| Analyses reelles | ${ANALYSES:-0} |"
+            echo "| Integrite depot | $INTEGRITE |"
+            echo ""
+
+            if [[ "$PRESENTES" != "true" ]]; then
+              echo "### TESTS REELS NON EXECUTES"
+              echo ""
+              echo "Aucune course reelle attestee disponible."
+              echo "Succes technique uniquement."
+            elif [[ "$REEL" == "success" ]]; then
+              echo "### ANALYSES REELLES REUSSIES"
+              echo ""
+              echo "M1 a M5 : classements complets valides."
+              echo "Attestations non verifiees en ligne."
+            else
+              echo "### TESTS REELS NON VALIDES"
+              echo ""
+              echo "Consulter les erreurs du job."
+            fi
+
+            echo ""
+            echo "- Branche de reparation uniquement"
+            echo "- Lecture seule"
+            echo "- Aucun FIGE"
+            echo "- Aucune publication"
+            echo "- Aucune collecte PMU automatique"
+          } >> "$GITHUB_STEP_SUMMARY"
