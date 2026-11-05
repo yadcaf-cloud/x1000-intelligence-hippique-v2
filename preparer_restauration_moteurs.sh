@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# X1000 PHOENIX — RESTAURATION CONTROLEE M1 A M5
+# ==================================================
+# X1000 — INTELLIGENCE HIPPIQUE HUMAINE V2
+# RESTAURATION CONTROLEE DES MOTEURS M1 A M5
 # Aucun commit, aucun push, aucune publication.
+# ==================================================
 
-echo "=== X1000 : VERIFICATION DU DEPOT ==="
+echo "=== X1000 — INTELLIGENCE HIPPIQUE HUMAINE V2 ==="
+echo "=== VERIFICATION DU DEPOT ==="
 
 git rev-parse --is-inside-work-tree >/dev/null
 cd "$(git rev-parse --show-toplevel)"
@@ -24,7 +28,7 @@ fi
 # Executer la restauration deja prevue dans le depot.
 bash restaurer_moteurs.sh
 
-echo "=== DIAGNOSTIC M1 A M5 ==="
+echo "=== DIAGNOSTIC DES MOTEURS M1 A M5 ==="
 
 python -B verification_moteurs.py
 
@@ -34,5 +38,5 @@ git status --short
 git diff --cached --check
 git diff --check
 
-echo "=== FIN DE LA VERIFICATION ==="
+echo "=== FIN DE LA VERIFICATION X1000 V2 ==="
 echo "Aucun commit ni push automatique."
