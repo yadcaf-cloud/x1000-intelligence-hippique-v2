@@ -1,34 +1,38 @@
-name: X1000 - Test fonctionnel M1 a M5
+name: X1000 - Test fonctionnel reel M1-M5
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - fix/x1000-v2-reparation-controlee
     paths:
       - "moteurs/**"
-      - "tests/test_fonctionnel_reel_m1_m5.py"
-      - "tests/donnees_reelles/**"
+      - "tests/**"
       - ".github/workflows/test-fonctionnel-reel-m1-m5.yml"
 
 permissions:
   contents: read
 
+concurrency:
+  group: x1000-test-reel-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  test-moteurs:
-    name: Diagnostic M1-M5 lecture seule
-    runs-on: ubuntu-latest
+  diagnostic:
+    name: X1000 M1-M5 - lecture seule
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     env:
+      TZ: Europe/Paris
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
-      TZ: Europe/Paris
       X1000_READ_ONLY: "1"
-      X1000_NO_PUBLICATION: "1"
       X1000_NO_FIGE: "1"
+      X1000_NO_PUBLICATION: "1"
 
     steps:
-      - name: Checkout branche controlee
+      - name: Recuperer branche de reparation
         uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -38,27 +42,104 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Verifier la branche
+      - name: Verifier branche et fichiers
         shell: bash
         run: |
           set -euo pipefail
+
           test "$GITHUB_REF_NAME" = \
             "fix/x1000-v2-reparation-controlee"
-          test ! -e .git/index.lock
-          echo "Branche autorisee"
 
-      - name: Executer le diagnostic isole
+          for f in m1 m2 m3 m4 m5; do
+            test -f "moteurs/$f.py"
+          done
+
+          test -f moteurs/noyau_commun.py
+          test -f tests/test_fonctionnel_reel_m1_m5.py
+
+          echo "Branche et moteurs verifies"
+
+      - name: Verifier les courses attestees
         shell: bash
         run: |
           set -euo pipefail
-          python -B tests/test_fonctionnel_reel_m1_m5.py
 
-      - name: Verifier le depot intact
+          python -B - <<'PY'
+          import json
+          from pathlib import Path
+
+          dossier = Path("tests/donnees_reelles")
+          fichiers = sorted(dossier.glob("*.json"))
+
+          if not fichiers:
+              raise SystemExit(
+                  "ECHEC : aucune course reelle "
+                  "attestee disponible"
+              )
+
+          for fichier in fichiers:
+              data = json.loads(
+                  fichier.read_text(encoding="utf-8")
+              )
+              preuve = data.get("preuve", {})
+              course = data.get("course", {})
+
+              if not isinstance(preuve, dict):
+                  raise SystemExit("Preuve invalide")
+
+              if not isinstance(course, dict):
+                  raise SystemExit("Course invalide")
+
+              if not preuve.get("verification_humaine"):
+                  raise SystemExit(
+                      "Verification humaine absente"
+                  )
+
+              if not str(
+                  preuve.get("source_url", "")
+              ).startswith("https://"):
+                  raise SystemExit(
+                      "Source HTTPS manquante"
+                  )
+
+              if not course.get(
+                  "localisation_france_verifiee"
+              ):
+                  raise SystemExit(
+                      "Localisation France non verifiee"
+                  )
+
+              if not course.get("depart_verifie"):
+                  raise SystemExit(
+                      "Depart non verifie"
+                  )
+
+              print("Fixture attestee :", fichier.name)
+
+          print("Nombre de courses :", len(fichiers))
+          PY
+
+      - name: Tester M1 a M5
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -B \
+            tests/test_fonctionnel_reel_m1_m5.py
+
+      - name: Verifier absence de modifications
         if: always()
         shell: bash
         run: |
           set -euo pipefail
+
           git diff --exit-code
           git diff --cached --exit-code
-          test -z "$(git ls-files --others --exclude-standard)"
-          echo "Fichiers suivis et non suivis : intacts"
+
+          test -z "$(
+            git ls-files --others --exclude-standard
+          )"
+
+          echo "Depot intact"
+          echo "Aucun FIGE cree par le workflow"
+          echo "Aucune publication par le workflow"
