@@ -1,4 +1,4 @@
-name: X1000 V2.4 - Diagnostic M1 a M5
+name: X1000 V2.5 - Diagnostic securise M1 a M5
 
 run-name: Diagnostic controle sans publication
 
@@ -29,30 +29,43 @@ concurrency:
 
 jobs:
   diagnostic:
-    name: Verification M1-M5
+    name: Verification securisee M1-M5
+
+    if: github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee'
+
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+
+    defaults:
+      run:
+        shell: bash
 
     env:
       TZ: Europe/Paris
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
+      PYTHONPATH: ""
+      PIP_NO_INDEX: "1"
 
     steps:
       - name: Recuperer la branche
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 1
 
-      - name: Installer Python
-        uses: actions/setup-python@v6
+      - name: Installer Python 3.11
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Verifier les fichiers
-        shell: bash
+      - name: Verifier branche et fichiers
         run: |
           set -Eeuo pipefail
+
+          test "$GITHUB_REF" = \
+            "refs/heads/fix/x1000-v2-reparation-controlee"
+
           for f in \
             m1.py m2.py m3.py m4.py m5.py \
             moteurs/noyau_commun.py \
@@ -60,60 +73,88 @@ jobs:
             test_validation_moteurs.py \
             coordination_x1000.py
           do
-            test -f "$f" || {
+            if [[ ! -f "$f" ]]; then
               echo "::error::Fichier absent : $f"
               exit 1
-            }
+            fi
+
             echo "OK : $f"
           done
 
-      - name: Verifier la syntaxe Python
-        shell: bash
+      - name: Verifier syntaxe Python
         run: |
           set -Eeuo pipefail
+
           python -B - <<'PY'
           import ast
           from pathlib import Path
 
           fichiers = [
-              "m1.py", "m2.py", "m3.py",
-              "m4.py", "m5.py",
+              "m1.py",
+              "m2.py",
+              "m3.py",
+              "m4.py",
+              "m5.py",
               "moteurs/noyau_commun.py",
               "validation_moteurs.py",
               "test_validation_moteurs.py",
               "coordination_x1000.py",
           ]
-          for fichier in fichiers:
-              p = Path(fichier)
+
+          for nom in fichiers:
+              fichier = Path(nom)
               ast.parse(
-                  p.read_text(encoding="utf-8"),
-                  filename=str(p),
+                  fichier.read_text(encoding="utf-8"),
+                  filename=str(fichier),
               )
-              print("SYNTAXE OK :", fichier)
+              print("SYNTAXE OK :", nom)
           PY
 
-      - name: Auto-test validation moteurs
-        run: python -B validation_moteurs.py
-
-      - name: Tests renforces M1-M5
-        run: python -B test_validation_moteurs.py
-
-      - name: Verifier absence de modifications
-        shell: bash
+      - name: Tests M1-M5 dans copie temporaire
         run: |
           set -Eeuo pipefail
+
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "$TMP"' EXIT
+
+          mkdir -p "$TMP/source" "$TMP/runtime"
+
+          tar --exclude=.git -cf - . |
+            tar -xf - -C "$TMP/source"
+
+          chmod -R a-w "$TMP/source"
+
+          cd "$TMP/runtime"
+
+          export HOME="$TMP/runtime"
+          export TMPDIR="$TMP/runtime"
+          export PYTHONPATH="$TMP/source"
+
+          python -B \
+            "$TMP/source/test_validation_moteurs.py"
+
+      - name: Verifier integrite du depot
+        if: always()
+        run: |
+          set -Eeuo pipefail
+
           git status --short
-          if test -n "$(git status --porcelain)"; then
-            echo "::error::Modifications detectees"
+
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "::error::Depot modifie"
             exit 1
           fi
+
+          echo "Depot inchange"
 
       - name: Bilan final
         if: success()
         run: |
-          echo "DIAGNOSTIC TERMINE : OK"
-          echo "Aucune collecte PMU par le workflow"
-          echo "Aucune publication automatique"
+          echo "DIAGNOSTIC X1000 : OK"
+          echo "M1 a M5 : controles executes"
+          echo "Aucun commit automatique"
+          echo "Aucun push automatique"
           echo "Aucun FIGE automatique"
+          echo "Aucune publication"
           echo "Aucun deploiement"
-          echo "Archives inchangees"
+          echo "Archives du depot inchangees"
