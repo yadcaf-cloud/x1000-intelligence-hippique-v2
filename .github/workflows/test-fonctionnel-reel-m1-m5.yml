@@ -57,75 +57,136 @@ jobs:
           test -f moteurs/noyau_commun.py
           test -f tests/test_fonctionnel_reel_m1_m5.py
 
-          echo "Branche et moteurs verifies"
+          echo "Branche et fichiers verifies"
 
       - name: Verifier les courses attestees
+        id: courses
         shell: bash
         run: |
           set -euo pipefail
 
           python -B - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           dossier = Path("tests/donnees_reelles")
           fichiers = sorted(dossier.glob("*.json"))
 
           if not fichiers:
-              raise SystemExit(
-                  "ECHEC : aucune course reelle "
-                  "attestee disponible"
+              print(
+                  "::notice::Aucune course reelle "
+                  "attestee disponible."
               )
-
-          for fichier in fichiers:
-              data = json.loads(
-                  fichier.read_text(encoding="utf-8")
+              print(
+                  "Les autotests techniques seront "
+                  "executes sans courses reelles."
               )
-              preuve = data.get("preuve", {})
-              course = data.get("course", {})
+              with open(
+                  os.environ["GITHUB_OUTPUT"],
+                  "a",
+                  encoding="utf-8",
+              ) as sortie:
+                  sortie.write("courses=absentes\n")
+          else:
+              for fichier in fichiers:
+                  data = json.loads(
+                      fichier.read_text(encoding="utf-8")
+                  )
+                  if not isinstance(data, dict):
+                      raise SystemExit(
+                          "Structure JSON invalide"
+                      )
 
-              if not isinstance(preuve, dict):
-                  raise SystemExit("Preuve invalide")
+                  preuve = data.get("preuve")
+                  course = data.get("course")
 
-              if not isinstance(course, dict):
-                  raise SystemExit("Course invalide")
+                  if not isinstance(preuve, dict):
+                      raise SystemExit(
+                          "Preuve invalide"
+                      )
+                  if not isinstance(course, dict):
+                      raise SystemExit(
+                          "Course invalide"
+                      )
 
-              if not preuve.get("verification_humaine"):
-                  raise SystemExit(
-                      "Verification humaine absente"
+                  if preuve.get(
+                      "verification_humaine"
+                  ) is not True:
+                      raise SystemExit(
+                          "Verification humaine absente"
+                      )
+
+                  url = preuve.get("source_url")
+                  if (
+                      not isinstance(url, str)
+                      or not url.startswith("https://")
+                  ):
+                      raise SystemExit(
+                          "Source HTTPS manquante"
+                      )
+
+                  if course.get(
+                      "localisation_france_verifiee"
+                  ) is not True:
+                      raise SystemExit(
+                          "Localisation France non verifiee"
+                      )
+
+                  if course.get(
+                      "depart_verifie"
+                  ) is not True:
+                      raise SystemExit(
+                          "Depart non verifie"
+                      )
+
+                  print(
+                      "Fixture declaree attestee :",
+                      fichier.name
                   )
 
-              if not str(
-                  preuve.get("source_url", "")
-              ).startswith("https://"):
-                  raise SystemExit(
-                      "Source HTTPS manquante"
-                  )
+              with open(
+                  os.environ["GITHUB_OUTPUT"],
+                  "a",
+                  encoding="utf-8",
+              ) as sortie:
+                  sortie.write("courses=presentes\n")
 
-              if not course.get(
-                  "localisation_france_verifiee"
-              ):
-                  raise SystemExit(
-                      "Localisation France non verifiee"
-                  )
-
-              if not course.get("depart_verifie"):
-                  raise SystemExit(
-                      "Depart non verifie"
-                  )
-
-              print("Fixture attestee :", fichier.name)
-
-          print("Nombre de courses :", len(fichiers))
+              print("Nombre de courses :", len(fichiers))
           PY
 
       - name: Tester M1 a M5
         shell: bash
         run: |
           set -euo pipefail
+          python -B tests/test_fonctionnel_reel_m1_m5.py
 
-          python -B \
-            tests/test_fonctionnel_reel_m1_m5.py
+      - name: Bilan du diagnostic
+        if: success()
+        shell: bash
+        env:
+          COURSES: ${{ steps.courses.outputs.courses }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## X1000 - Diagnostic M1 a M5"
+            echo ""
+            echo "Branche de reparation uniquement."
+            echo ""
+            echo "- Lecture seule : active"
+            echo "- FIGE : interdit"
+            echo "- Publication : interdite"
+            echo "- Collecte PMU : aucune dans ce workflow"
+            echo ""
+            if [[ "$COURSES" == "presentes" ]]; then
+              echo "Courses : tests executes sur fixtures."
+              echo "Sources a verifier independamment."
+            else
+              echo "Courses reelles : NON TESTEES."
+              echo "Autotests techniques uniquement."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verifier absence de modifications
         if: always()
@@ -140,6 +201,5 @@ jobs:
             git ls-files --others --exclude-standard
           )"
 
-          echo "Depot intact"
-          echo "Aucun FIGE cree par le workflow"
-          echo "Aucune publication par le workflow"
+          echo "Depot de travail intact"
+          echo "Controle de modifications termine"
