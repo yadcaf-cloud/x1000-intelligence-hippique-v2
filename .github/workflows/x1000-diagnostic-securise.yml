@@ -1,0 +1,76 @@
+name: X1000 V2 - Diagnostic securise M1-M5
+
+run-name: X1000 - Audit sans publication
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x1000-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    name: Verification moteurs M1-M5
+    runs-on: ubuntu-24.04
+
+    env:
+      TZ: Europe/Paris
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Recuperation du depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installation Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verification de la branche
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REF_NAME" = \
+            "fix/x1000-v2-reparation-controlee"
+
+      - name: Diagnostic Python
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -V
+          for f in m1.py m2.py m3.py m4.py m5.py; do
+            if [ -f "$f" ]; then
+              python3 - "$f" <<'PY'
+          import ast
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          ast.parse(path.read_text(encoding="utf-8"))
+          print(f"OK : {path}")
+          PY
+            else
+              echo "ABSENT : $f"
+              exit 1
+            fi
+          done
+
+      - name: Controle final
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "Verification des modifications :"
+          git status --short
+          test -z "$(git status --porcelain)"
+          echo "Diagnostic termine sans modification."
