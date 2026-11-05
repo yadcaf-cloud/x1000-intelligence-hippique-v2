@@ -1,0 +1,83 @@
+name: X1000 - Recherche quotidienne securisee
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x1000-recherche-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  recherche:
+    name: Recherche et analyses M1-M5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    env:
+      TZ: Europe/Paris
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONNOUSERSITE: "1"
+      X1000_READ_ONLY: "1"
+      X1000_NO_FIGE: "1"
+      X1000_NO_PUBLICATION: "1"
+      X1000_SOURCE_URL: ${{ vars.X1000_SOURCE_URL }}
+      X1000_SOURCE_HOST: ${{ vars.X1000_SOURCE_HOST }}
+
+    steps:
+      - name: Recuperer la branche
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verifier branche de reparation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REF_NAME" = \
+            "fix/x1000-v2-reparation-controlee"
+
+          test -f recherche_courses_x1000.py
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Executer la recherche controlee
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -B recherche_courses_x1000.py
+
+      - name: Verifier integrite
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git diff --exit-code
+          git diff --cached --exit-code
+
+          test -z "$(
+            git ls-files --others --exclude-standard
+          )"
+
+      - name: Bilan de securite
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## X1000 - Recherche securisee"
+            echo ""
+            echo "- Branche de reparation uniquement"
+            echo "- Lecture seule"
+            echo "- Aucun FIGE automatique"
+            echo "- Aucune publication automatique"
+            echo "- Aucune modification d'archives"
+            echo "- Source HTTPS explicitement autorisee"
+          } >> "$GITHUB_STEP_SUMMARY"
