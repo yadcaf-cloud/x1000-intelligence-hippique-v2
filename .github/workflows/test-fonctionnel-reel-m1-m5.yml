@@ -56,6 +56,7 @@ jobs:
 
           test -f moteurs/noyau_commun.py
           test -f tests/test_fonctionnel_reel_m1_m5.py
+          test -f tests/valider_donnees_reelles.py
 
           echo "Branche et fichiers verifies"
 
@@ -126,9 +127,29 @@ jobs:
               )
           PY
 
+      - name: Valider les donnees reelles M1 a M5
+        id: validation
+        if: steps.courses.outputs.presentes == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$GITHUB_REF_NAME" = \
+            "fix/x1000-v2-reparation-controlee"
+
+          python -B tests/valider_donnees_reelles.py
+
+          echo "statut=REUSSIS" >> "$GITHUB_OUTPUT"
+
+          echo "Validation structurelle terminee"
+
       - name: Tester les courses reelles M1 a M5
         id: reel
-        if: steps.courses.outputs.presentes == 'true'
+        if: >-
+          ${{
+            steps.courses.outputs.presentes == 'true'
+            && steps.validation.outcome == 'success'
+          }}
         shell: bash
         run: |
           set -euo pipefail
@@ -136,7 +157,6 @@ jobs:
           python -B - <<'PY'
           import os
           import tempfile
-          from pathlib import Path
           from tests.test_fonctionnel_reel_m1_m5 import (
               FIXTURES,
               MOTEURS,
@@ -227,6 +247,7 @@ jobs:
           TECHNIQUE: ${{ steps.technique.outcome }}
           COURSES: ${{ steps.courses.outputs.nombre }}
           PRESENTES: ${{ steps.courses.outputs.presentes }}
+          VALIDATION: ${{ steps.validation.outcome }}
           REEL: ${{ steps.reel.outcome }}
           ANALYSES: ${{ steps.reel.outputs.analyses }}
           INTEGRITE: ${{ steps.integrite.outcome }}
@@ -238,6 +259,7 @@ jobs:
             echo "|---|---|"
             echo "| Autotests techniques | $TECHNIQUE |"
             echo "| Fixtures detectees | ${COURSES:-0} |"
+            echo "| Validation des donnees | $VALIDATION |"
             echo "| Tests reels | $REEL |"
             echo "| Analyses reelles | ${ANALYSES:-0} |"
             echo "| Integrite depot | $INTEGRITE |"
@@ -246,13 +268,17 @@ jobs:
             if [[ "$PRESENTES" != "true" ]]; then
               echo "### TESTS REELS NON EXECUTES"
               echo ""
-              echo "Aucune course reelle attestee disponible."
+              echo "Aucune course attestee disponible."
               echo "Succes technique uniquement."
+            elif [[ "$VALIDATION" != "success" ]]; then
+              echo "### VALIDATION DES DONNEES ECHOUEE"
+              echo ""
+              echo "Les analyses reelles sont bloquees."
             elif [[ "$REEL" == "success" ]]; then
               echo "### ANALYSES REELLES REUSSIES"
               echo ""
               echo "M1 a M5 : classements complets valides."
-              echo "Attestations non verifiees en ligne."
+              echo "Sources non verifiees en ligne."
             else
               echo "### TESTS REELS NON VALIDES"
               echo ""
@@ -265,4 +291,27 @@ jobs:
             echo "- Aucun FIGE"
             echo "- Aucune publication"
             echo "- Aucune collecte PMU automatique"
+            echo "- Archives preservees"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Exiger la reussite des controles
+        if: always()
+        shell: bash
+        env:
+          TECHNIQUE: ${{ steps.technique.outcome }}
+          PRESENTES: ${{ steps.courses.outputs.presentes }}
+          VALIDATION: ${{ steps.validation.outcome }}
+          REEL: ${{ steps.reel.outcome }}
+          INTEGRITE: ${{ steps.integrite.outcome }}
+        run: |
+          set -euo pipefail
+
+          test "$TECHNIQUE" = "success"
+          test "$INTEGRITE" = "success"
+
+          if [[ "$PRESENTES" == "true" ]]; then
+            test "$VALIDATION" = "success"
+            test "$REEL" = "success"
+          fi
+
+          echo "CONTROLES X1000 : TERMINES"
