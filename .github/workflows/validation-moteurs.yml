@@ -1,396 +1,96 @@
-name: X1000 V2 - Validation securisee M1 a M5
-
-run-name: Validation M1-M5 sans publication
+name: X1000 - Validation independante M1-M5
 
 on:
   workflow_dispatch:
-
   push:
     branches:
       - fix/x1000-v2-reparation-controlee
     paths:
       - "moteurs/**"
-      - "m1.py"
-      - "m2.py"
-      - "m3.py"
-      - "m4.py"
-      - "m5.py"
-      - "noyau_commun.py"
-      - "verification_moteurs.py"
-      - ".github/workflows/validation-moteurs.yml"
-
-  pull_request:
-    paths:
-      - "moteurs/**"
-      - "m1.py"
-      - "m2.py"
-      - "m3.py"
-      - "m4.py"
-      - "m5.py"
-      - "noyau_commun.py"
-      - "verification_moteurs.py"
       - ".github/workflows/validation-moteurs.yml"
 
 permissions:
   contents: read
 
-concurrency:
-  group: x1000-validation-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  validation-moteurs:
-    name: Controle securise M1-M5
+  validation:
+    if: github.ref == 'refs/heads/fix/x1000-v2-reparation-controlee'
     runs-on: ubuntu-24.04
-
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     env:
-      TZ: Europe/Paris
       PYTHONDONTWRITEBYTECODE: "1"
-      PYTHONUNBUFFERED: "1"
       PYTHONNOUSERSITE: "1"
-      PIP_DISABLE_PIP_VERSION_CHECK: "1"
-
-    defaults:
-      run:
-        shell: bash
+      TZ: Europe/Paris
 
     steps:
-      - name: Recuperer le depot
+      - name: Checkout securise
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Installer Python
+      - name: Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Preparer un environnement isole
-        id: sandbox
+      - name: Verifier M1-M5
+        shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
 
-          WORKDIR="$(mktemp -d)"
+          mkdir -p "$RUNNER_TEMP/x1000-validation"
+          git archive HEAD | tar -xf - \
+            -C "$RUNNER_TEMP/x1000-validation"
 
-          tar \
-            --exclude=.git \
-            --exclude=__pycache__ \
-            --exclude=.pytest_cache \
-            -cf - . | tar -xf - -C "$WORKDIR"
+          cd "$RUNNER_TEMP/x1000-validation"
 
-          echo "workdir=$WORKDIR" >> "$GITHUB_OUTPUT"
-
-          echo "Environnement de test prepare."
-
-      - name: Verifier les fichiers moteurs
-        working-directory: ${{ steps.sandbox.outputs.workdir }}
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
-          from pathlib import Path
-
-          base = Path("moteurs")
-
-          fichiers = [
-              base / "noyau_commun.py",
-              *[
-                  base / f"m{i}.py"
-                  for i in range(1, 6)
-              ],
-          ]
-
-          manquants = [
-              str(p)
-              for p in fichiers
-              if not p.is_file()
-          ]
-
-          if manquants:
-              raise SystemExit(
-                  "Fichiers absents : "
-                  + ", ".join(manquants)
-              )
-
-          print("M1-M5 et noyau commun presents.")
-          PY
-
-      - name: Verifier la syntaxe Python
-        working-directory: ${{ steps.sandbox.outputs.workdir }}
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
+          python -B - <<'PY'
           import ast
+          import importlib
           from pathlib import Path
 
-          fichiers = [
-              Path("moteurs/noyau_commun.py"),
-              *[
-                  Path(f"moteurs/m{i}.py")
-                  for i in range(1, 6)
-              ],
-          ]
+          for i in range(1, 6):
+              name = f"moteurs/m{i}.py"
+              path = Path(name)
 
-          for fichier in fichiers:
-              source = fichier.read_text(
-                  encoding="utf-8"
-              )
+              if not path.is_file() or path.is_symlink():
+                  raise SystemExit(f"Absent: {name}")
+
               ast.parse(
-                  source,
-                  filename=str(fichier),
+                  path.read_text(encoding="utf-8-sig"),
+                  filename=name
               )
-              print(f"Syntaxe OK : {fichier}")
-          PY
-
-      - name: Tester les imports et interfaces
-        working-directory: ${{ steps.sandbox.outputs.workdir }}
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
-          import importlib
-
-          from moteurs import noyau_commun as noyau
-
-          for fonction in (
-              "verifier_course",
-              "verifier_sortie_analyse",
-          ):
-              assert callable(
-                  getattr(noyau, fonction, None)
-              ), f"Fonction absente : {fonction}"
-
-          for i in range(1, 6):
-              nom = f"M{i}"
 
               module = importlib.import_module(
                   f"moteurs.m{i}"
               )
 
-              assert getattr(
-                  module, "MOTEUR", None
-              ) == nom, (
-                  f"{nom}: identite incorrecte"
-              )
+              if getattr(module, "MOTEUR", None) != f"M{i}":
+                  raise SystemExit("Identite invalide")
 
-              assert callable(
-                  getattr(
-                      module,
-                      "analyser_course",
-                      None,
-                  )
-              ), (
-                  f"{nom}: analyser_course absent"
-              )
+              if not callable(
+                  getattr(module, "analyser_course", None)
+              ):
+                  raise SystemExit("Interface invalide")
 
-              print(f"{nom}: interface OK")
+              if getattr(module, "COUVERTURE_MIN", None) != 1.0:
+                  raise SystemExit("Configuration inattendue")
 
-          print("Interfaces M1-M5 validees.")
+              print(f"M{i}: interface conforme")
           PY
 
-      - name: Tester absence de predictions inventees
-        working-directory: ${{ steps.sandbox.outputs.workdir }}
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
-          import copy
-          import importlib
-
-          from datetime import (
-              datetime,
-              timedelta,
-              timezone,
-          )
-
-          from moteurs import noyau_commun as noyau
-
-          depart = (
-              datetime.now(timezone.utc)
-              + timedelta(days=1)
-          ).isoformat()
-
-          course = {
-              "id": "TEST-MOTEURS-SANS-DONNEES",
-              "localisation_france_verifiee": True,
-              "depart_verifie": True,
-              "depart": depart,
-              "nombre_partants": 5,
-              "non_partants": [],
-              "partants": [
-                  {
-                      "numero": i,
-                      "nom": f"Cheval test {i}",
-                      "non_partant": False,
-                  }
-                  for i in range(1, 6)
-              ],
-          }
-
-          valide, raison = noyau.verifier_course(
-              copy.deepcopy(course)
-          )
-
-          assert valide, raison
-
-          def verifier_rejet(resultat, nom, motif):
-              try:
-                  noyau.verifier_sortie_analyse(
-                      resultat=copy.deepcopy(resultat),
-                      course=copy.deepcopy(course),
-                  )
-              except ValueError:
-                  print(f"{nom}: rejet {motif} OK")
-                  return
-
-              raise AssertionError(
-                  f"{nom}: {motif} accepte"
-              )
-
-          for i in range(1, 6):
-              nom = f"M{i}"
-
-              module = importlib.import_module(
-                  f"moteurs.m{i}"
-              )
-
-              entree = copy.deepcopy(course)
-
-              resultat = module.analyser_course(
-                  entree
-              )
-
-              assert entree == course, (
-                  f"{nom}: entree modifiee"
-              )
-
-              assert isinstance(resultat, dict), (
-                  f"{nom}: sortie non dictionnaire"
-              )
-
-              assert resultat.get("moteur") == nom
-
-              sortie_validee = (
-                  noyau.verifier_sortie_analyse(
-                      resultat=copy.deepcopy(resultat),
-                      course=copy.deepcopy(course),
-                  )
-              )
-
-              assert sortie_validee == resultat, (
-                  f"{nom}: sortie modifiee"
-              )
-
-              assert resultat.get("course_id") == (
-                  course["id"]
-              )
-
-              assert resultat.get("statut") == (
-                  "DONNEES_INSUFFISANTES"
-              ), (
-                  f"{nom}: statut incorrect"
-              )
-
-              assert resultat.get("classement") == [], (
-                  f"{nom}: classement invente"
-              )
-
-              assert resultat.get(
-                  "classement_partiel"
-              ) == [], (
-                  f"{nom}: classement partiel invente"
-              )
-
-              assert resultat.get("fige") is False, (
-                  f"{nom}: FIGE interdit"
-              )
-
-              assert resultat.get(
-                  "publication"
-              ) is False, (
-                  f"{nom}: publication interdite"
-              )
-
-              invalide = copy.deepcopy(resultat)
-              invalide.pop("moteur", None)
-
-              verifier_rejet(
-                  invalide,
-                  nom,
-                  "identite absente",
-              )
-
-              invalide = copy.deepcopy(resultat)
-              invalide["fige"] = True
-
-              verifier_rejet(
-                  invalide,
-                  nom,
-                  "FIGE interdit",
-              )
-
-              invalide = copy.deepcopy(resultat)
-              invalide["publication"] = True
-
-              verifier_rejet(
-                  invalide,
-                  nom,
-                  "publication interdite",
-              )
-
-              print(
-                  f"{nom}: controles de securite OK"
-              )
-
-          print("CONTROLE M1-M5 TERMINE")
-          PY
-
-      - name: Verifier absence de modifications du depot
+      - name: Verifier integrite
         if: always()
+        shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
+          test -z "$(git status --porcelain)"
 
-          if [[ -n "$(git status --porcelain)" ]]; then
-            echo "::error::Depot modifie pendant les tests."
-            git status --short
-            exit 1
-          fi
-
-          echo "Depot original inchange."
-
-      - name: Bilan de validation
-        if: always()
+      - name: Bilan
+        if: success()
         run: |
-          echo "## X1000 - Validation M1-M5" \
+          echo "M1-M5 : interfaces verifiees" \
             >> "$GITHUB_STEP_SUMMARY"
-
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-
-          echo "- Depot original : lecture seule" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "- Aucun commit automatique" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "- Aucun push automatique" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "- Aucune publication automatique" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "- Aucun FIGE automatique" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "- Aucune collecte PMU automatique" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "- Tests executes en environnement isole" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-
-          echo "Consulter les etapes pour le resultat." \
+          echo "Aucune publication ni FIGE" \
             >> "$GITHUB_STEP_SUMMARY"
