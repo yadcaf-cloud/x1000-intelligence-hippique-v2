@@ -1,0 +1,73 @@
+name: X1000 - Audit de bout en bout M1-M5
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "api.py"
+      - "coordination_x1000.py"
+      - "integration_x1000.py"
+      - "validation_moteurs.py"
+      - "moteurs/**"
+      - "tests/test_bout_en_bout_x1000.py"
+      - ".github/workflows/bout-en-bout-x1000.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit-bout-en-bout:
+    name: Verification complete X1000
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer les dependances API
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            "fastapi>=0.115,<1" \
+            "httpx>=0.27,<1"
+
+      - name: Verifier les fichiers essentiels
+        run: |
+          set -e
+          test -f api.py
+          test -f coordination_x1000.py
+          test -f integration_x1000.py
+          test -f validation_moteurs.py
+          test -f moteurs/noyau_commun.py
+          test -f tests/test_bout_en_bout_x1000.py
+
+          for n in 1 2 3 4 5; do
+            test -f "moteurs/m${n}.py"
+          done
+
+      - name: Verifier la syntaxe Python
+        run: |
+          python -m compileall -q \
+            api.py \
+            coordination_x1000.py \
+            integration_x1000.py \
+            validation_moteurs.py \
+            moteurs \
+            tests/test_bout_en_bout_x1000.py
+
+      - name: Executer les tests de bout en bout
+        run: |
+          python -m unittest discover \
+            -s tests \
+            -p "test_bout_en_bout_x1000.py" \
+            -v
