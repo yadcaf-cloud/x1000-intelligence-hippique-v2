@@ -1,0 +1,81 @@
+name: X1000 - Coordination centrale renforcee M1-M5
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "coordination_x1000.py"
+      - "integration_x1000.py"
+      - "validation_moteurs.py"
+      - "moteurs/**"
+      - "tests/test_coordination_renforcee_x1000.py"
+      - ".github/workflows/coordination-renforcee-x1000.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  coordination-renforcee:
+    name: Controle central securise M1-M5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Verifier les composants
+        run: |
+          set -eu
+          test -f coordination_x1000.py
+          test -f integration_x1000.py
+          test -f validation_moteurs.py
+          test -f moteurs/noyau_commun.py
+          test -f tests/test_coordination_renforcee_x1000.py
+
+      - name: Verifier la syntaxe Python
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          fichiers = [
+              "coordination_x1000.py",
+              "integration_x1000.py",
+              "validation_moteurs.py",
+              "tests/test_coordination_renforcee_x1000.py",
+          ]
+
+          for nom in fichiers:
+              ast.parse(
+                  Path(nom).read_text(encoding="utf-8"),
+                  filename=nom,
+              )
+              print("SYNTAXE OK:", nom)
+          PY
+
+      - name: Executer les tests renforces
+        run: |
+          python -m unittest \
+            discover \
+            -s tests \
+            -p "test_coordination_renforcee_x1000.py" \
+            -v
+
+      - name: Confirmation de securite
+        if: success()
+        run: |
+          echo "Coordination centrale : tests reussis"
+          echo "M1-M5 : aucune modification"
+          echo "FIGES : aucune creation"
+          echo "Publication : aucune"
+          echo "Archives : aucune modification"
