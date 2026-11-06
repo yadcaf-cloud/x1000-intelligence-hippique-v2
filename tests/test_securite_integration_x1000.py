@@ -3,7 +3,7 @@
 
 """
 X1000 INTELLIGENCE HIPPIQUE V2
-Tests renforces integration M1-M5 et coordination.
+Tests renforces de securite M1-M5 et coordination.
 
 Tests fictifs exclusivement.
 Aucune collecte PMU.
@@ -32,6 +32,11 @@ PROTECTIONS = (
 )
 
 
+def resultat_classements(resultat):
+    """Extrait les classements independants."""
+    return resultat["predictions_independantes"].values()
+
+
 class TestSecuriteIntegrationX1000(unittest.TestCase):
 
     def setUp(self):
@@ -56,10 +61,8 @@ class TestSecuriteIntegrationX1000(unittest.TestCase):
             )
 
     def test_01_cinq_moteurs(self):
-        self.assertEqual(
-            set(integration.charger_moteurs()),
-            set(MOTEURS)
-        )
+        moteurs = integration.charger_moteurs()
+        self.assertEqual(set(moteurs), set(MOTEURS))
 
     def test_02_sorties_valides(self):
         for nom, sortie in self.sorties().items():
@@ -73,7 +76,9 @@ class TestSecuriteIntegrationX1000(unittest.TestCase):
             copy.deepcopy(self.course)
         )
         self.assertEqual(resultat["nombre_moteurs"], 5)
-        self.assertTrue(resultat["coordination_complete"])
+        self.assertTrue(
+            resultat["coordination_complete"]
+        )
         self.verifier_protections(resultat)
 
     def test_04_centrale_complete(self):
@@ -81,17 +86,21 @@ class TestSecuriteIntegrationX1000(unittest.TestCase):
             self.course, self.sorties()
         )
         self.assertEqual(resultat["nombre_moteurs"], 5)
-        self.assertTrue(resultat["coordination_complete"])
+        self.assertTrue(
+            resultat["coordination_complete"]
+        )
         self.verifier_protections(resultat)
 
     def test_05_accord_classements(self):
         sorties = self.sorties()
+
         a = integration.coordonner(
             self.course, copy.deepcopy(sorties)
         )
         b = central.coordonner(
             self.course, copy.deepcopy(sorties)
         )
+
         self.assertEqual(
             a["predictions_independantes"],
             b["predictions_independantes"]
@@ -101,75 +110,123 @@ class TestSecuriteIntegrationX1000(unittest.TestCase):
         resultat = integration.executer_integration(
             self.course
         )
-        for classement in result at_classements(resultat):
+
+        # Correction de l'erreur de syntaxe ligne 104.
+        for classement in resultat_classements(resultat):
             self.assertNotIn(7, classement)
+            self.assertEqual(len(classement), 5)
+            self.assertEqual(
+                len(set(classement)), 5
+            )
 
     def test_07_moteur_manquant(self):
         sorties = self.sorties()
         del sorties["M5"]
+
         for coordonner in (
             integration.coordonner,
             central.coordonner,
         ):
-            with self.subTest(fonction=coordonner.__module__):
+            with self.subTest(
+                fonction=coordonner.__module__
+            ):
                 with self.assertRaises(ValidationErreur):
-                    coordonner(self.course, sorties)
+                    coordonner(
+                        self.course,
+                        copy.deepcopy(sorties)
+                    )
 
     def test_08_identite_falsifiee(self):
         sorties = self.sorties()
         sorties["M1"]["moteur"] = "M5"
+
         for coordonner in (
             integration.coordonner,
             central.coordonner,
         ):
-            with self.subTest(fonction=coordonner.__module__):
+            with self.subTest(
+                fonction=coordonner.__module__
+            ):
                 with self.assertRaises(ValidationErreur):
-                    coordonner(self.course, sorties)
+                    coordonner(
+                        self.course,
+                        copy.deepcopy(sorties)
+                    )
 
     def test_09_fige_interdit(self):
         sorties = self.sorties()
         sorties["M2"]["fige"] = True
+
         for coordonner in (
             integration.coordonner,
             central.coordonner,
         ):
-            with self.subTest(fonction=coordonner.__module__):
+            with self.subTest(
+                fonction=coordonner.__module__
+            ):
                 with self.assertRaises(ValidationErreur):
-                    coordonner(self.course, sorties)
+                    coordonner(
+                        self.course,
+                        copy.deepcopy(sorties)
+                    )
 
     def test_10_publication_interdite(self):
         sorties = self.sorties()
         sorties["M4"]["publication"] = True
+
         for coordonner in (
             integration.coordonner,
             central.coordonner,
         ):
-            with self.subTest(fonction=coordonner.__module__):
+            with self.subTest(
+                fonction=coordonner.__module__
+            ):
                 with self.assertRaises(ValidationErreur):
-                    coordonner(self.course, sorties)
+                    coordonner(
+                        self.course,
+                        copy.deepcopy(sorties)
+                    )
 
     def test_11_course_non_modifiee(self):
         integration.executer_integration(self.course)
-        self.assertEqual(self.course, self.original)
+        self.assertEqual(
+            self.course,
+            self.original
+        )
 
     def test_12_sorties_non_modifiees(self):
         sorties = self.sorties()
         original = copy.deepcopy(sorties)
-        integration.coordonner(self.course, sorties)
-        central.coordonner(self.course, sorties)
+
+        integration.coordonner(
+            self.course, sorties
+        )
+        central.coordonner(
+            self.course, sorties
+        )
+
         self.assertEqual(sorties, original)
 
     def test_13_sha_stable_integration(self):
-        a = integration.executer_integration(self.course)
-        b = integration.executer_integration(self.course)
+        a = integration.executer_integration(
+            self.course
+        )
+        b = integration.executer_integration(
+            self.course
+        )
+
         self.assertEqual(
             a["empreinte_sha256"],
             b["empreinte_sha256"]
+        )
+        self.assertEqual(
+            len(a["empreinte_sha256"]), 64
         )
 
     def test_14_sha_detecte_changement(self):
         a = {"classement": [1, 2, 3, 4, 5]}
         b = {"classement": [2, 1, 3, 4, 5]}
+
         self.assertNotEqual(
             integration.empreinte_sha256(a),
             integration.empreinte_sha256(b)
@@ -177,10 +234,13 @@ class TestSecuriteIntegrationX1000(unittest.TestCase):
 
     def test_15_panne_moteur(self):
         moteurs = integration.charger_moteurs()
+
         with patch.object(
             moteurs["M3"],
             "analyser_course",
-            side_effect=RuntimeError("PANNE_TEST_M3")
+            side_effect=RuntimeError(
+                "PANNE_TEST_M3"
+            )
         ):
             with patch.object(
                 integration,
@@ -188,17 +248,30 @@ class TestSecuriteIntegrationX1000(unittest.TestCase):
                 return_value=moteurs
             ):
                 with self.assertRaisesRegex(
-                    RuntimeError, "PANNE_TEST_M3"
+                    RuntimeError,
+                    "PANNE_TEST_M3"
                 ):
                     integration.executer_integration(
                         self.course
                     )
-        self.assertEqual(self.course, self.original)
+
+        self.assertEqual(
+            self.course,
+            self.original
+        )
 
     def test_16_empreinte_centrale(self):
         sorties = self.sorties()
-        a = central.coordonner(self.course, sorties)
-        b = central.coordonner(self.course, sorties)
+
+        a = central.coordonner(
+            self.course,
+            copy.deepcopy(sorties)
+        )
+        b = central.coordonner(
+            self.course,
+            copy.deepcopy(sorties)
+        )
+
         self.assertEqual(
             a["empreinte_sha256"],
             b["empreinte_sha256"]
@@ -206,28 +279,39 @@ class TestSecuriteIntegrationX1000(unittest.TestCase):
 
     def test_17_protections_deux_systemes(self):
         sorties = self.sorties()
+
         for resultat in (
-            integration.coordonner(self.course, sorties),
-            central.coordonner(self.course, sorties),
+            integration.coordonner(
+                self.course,
+                copy.deepcopy(sorties)
+            ),
+            central.coordonner(
+                self.course,
+                copy.deepcopy(sorties)
+            ),
         ):
             self.verifier_protections(resultat)
 
     def test_18_aucune_prediction_inventee(self):
         sorties = self.sorties()
-        resultat = central.coordonner(self.course, sorties)
+
+        resultat = central.coordonner(
+            self.course,
+            copy.deepcopy(sorties)
+        )
+
         for nom in MOTEURS:
             attendu = [
                 p["numero"]
                 for p in sorties[nom]["classement"]
             ]
+
             self.assertEqual(
-                resultat["predictions_independantes"][nom],
+                resultat[
+                    "predictions_independantes"
+                ][nom],
                 attendu
             )
-
-
-def result_at_classements(resultat):
-    return resultat["predictions_independantes"].values()
 
 
 if __name__ == "__main__":
