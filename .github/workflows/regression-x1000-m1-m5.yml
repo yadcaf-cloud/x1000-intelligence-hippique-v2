@@ -1,0 +1,61 @@
+name: X1000 - Regression fonctionnelle M1-M5
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "moteurs/**"
+      - "validation_moteurs.py"
+      - "tests/test_regression_x1000_m1_m5.py"
+      - ".github/workflows/regression-x1000-m1-m5.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: Tests renforces M1-M5
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verifier les fichiers
+        run: |
+          test -f validation_moteurs.py
+          test -f moteurs/noyau_commun.py
+          for n in 1 2 3 4 5; do
+            test -f "moteurs/m${n}.py"
+          done
+
+      - name: Compilation Python
+        run: |
+          python -m compileall -q moteurs
+          python -m py_compile validation_moteurs.py
+          python -m py_compile \
+            tests/test_regression_x1000_m1_m5.py
+
+      - name: Tests fonctionnels renforces
+        run: |
+          python -m unittest \
+            discover \
+            -s tests \
+            -p "test_regression_x1000_m1_m5.py" \
+            -v
+
+      - name: Confirmation
+        if: success()
+        run: |
+          echo "X1000 : regression M1-M5 reussie"
+          echo "Aucun FIGE ni archive modifie"
