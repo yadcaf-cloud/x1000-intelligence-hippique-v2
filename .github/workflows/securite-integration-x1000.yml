@@ -2,6 +2,7 @@ name: X1000 - Securite integration M1-M5
 
 on:
   workflow_dispatch:
+
   push:
     branches:
       - fix/x1000-v2-reparation-controlee
@@ -16,6 +17,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: x1000-securite-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   securite-integration:
     name: Controle securite M1-M5
@@ -24,50 +29,83 @@ jobs:
 
     steps:
       - name: Recuperer le depot
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
 
       - name: Installer Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - name: Verifier les fichiers
+      - name: Verifier environnement
         run: |
           set -eu
+          python --version
+          python -m pip --version
+
+      - name: Verifier fichiers essentiels
+        run: |
+          set -eu
+
           test -f integration_x1000.py
           test -f coordination_x1000.py
           test -f validation_moteurs.py
           test -f moteurs/noyau_commun.py
-          test -f tests/test_securite_integration_x1000.py
 
           for n in 1 2 3 4 5; do
             test -f "moteurs/m${n}.py"
           done
 
+          test -f tests/test_securite_integration_x1000.py
+
+          echo "Fichiers essentiels presents"
+
       - name: Verifier syntaxe Python
         run: |
-          python -m compileall -q \
-            integration_x1000.py \
-            coordination_x1000.py \
-            validation_moteurs.py \
-            moteurs \
-            tests/test_securite_integration_x1000.py
+          set -eu
 
-      - name: Executer les tests de securite
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          fichiers = [
+              Path("integration_x1000.py"),
+              Path("coordination_x1000.py"),
+              Path("validation_moteurs.py"),
+              Path("moteurs/noyau_commun.py"),
+              Path("tests/test_securite_integration_x1000.py"),
+          ]
+
+          fichiers.extend(
+              Path(f"moteurs/m{i}.py")
+              for i in range(1, 6)
+          )
+
+          for fichier in fichiers:
+              ast.parse(
+                  fichier.read_text(encoding="utf-8"),
+                  filename=str(fichier),
+              )
+              print("OK:", fichier)
+          PY
+
+      - name: Executer tests securite M1-M5
         run: |
+          set -eu
+
           python -m unittest \
             discover \
             -s tests \
             -p "test_securite_integration_x1000.py" \
             -v
 
-      - name: Controle final
+      - name: Confirmation controle
         if: success()
         run: |
-          echo "Tests de securite reussis"
-          echo "Aucune collecte PMU"
+          echo "X1000 Intelligence Hippique V2"
+          echo "Tests securite termines avec succes"
+          echo "Aucune collecte PMU par ce workflow"
           echo "Aucun FIGE automatique"
-          echo "Aucune publication"
-          echo "Aucune modification des archives"
+          echo "Aucune publication automatique"
+          echo "Aucune modification des archives par ce workflow"
