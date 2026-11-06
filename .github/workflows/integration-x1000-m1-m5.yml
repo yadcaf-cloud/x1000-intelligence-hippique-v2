@@ -1,0 +1,79 @@
+name: X1000 - Integration M1 a M5
+
+on:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "integration_x1000.py"
+      - "coordination_x1000.py"
+      - "validation_moteurs.py"
+      - "moteurs/**"
+      - ".github/workflows/integration-x1000-m1-m5.yml"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration-x1000:
+    name: Verification integration M1-M5
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verifier les fichiers
+        run: |
+          test -f integration_x1000.py
+          test -f coordination_x1000.py
+          test -f validation_moteurs.py
+          test -f moteurs/noyau_commun.py
+
+          for i in 1 2 3 4 5; do
+            test -f "moteurs/m${i}.py"
+          done
+
+      - name: Verifier la syntaxe
+        run: |
+          python -m compileall -q \
+            integration_x1000.py \
+            coordination_x1000.py \
+            validation_moteurs.py \
+            moteurs
+
+      - name: Autotests M1 a M5
+        run: |
+          for i in 1 2 3 4 5; do
+            python -m "moteurs.m${i}" --self-test
+          done
+
+      - name: Tester integration centrale
+        run: |
+          python -m integration_x1000
+
+      - name: Tests fonctionnels existants
+        run: |
+          python -m unittest \
+            discover \
+            -s tests \
+            -p "test_fonctionnel_x1000.py" \
+            -v
+
+      - name: Verification terminee
+        run: |
+          echo "Verification X1000 terminee"
+          echo "Aucune collecte PMU demandee"
+          echo "Aucun FIGE automatique"
+          echo "Aucune publication automatique"
+          echo "Aucune modification des archives"
