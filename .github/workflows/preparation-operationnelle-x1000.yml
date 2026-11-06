@@ -1,0 +1,199 @@
+name: X1000 - Preparation operationnelle
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "moteurs/**"
+      - "coordination_x1000.py"
+      - "integration_x1000.py"
+      - "validation_moteurs.py"
+      - "api.py"
+      - "tests/**"
+      - ".github/workflows/preparation-operationnelle-x1000.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  preparation:
+    name: Controle operationnel M1-M5
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer dependances API
+        run: |
+          python -m pip install \
+            "fastapi>=0.110,<1" \
+            "httpx>=0.27,<1"
+
+      - name: Verifier les fichiers essentiels
+        run: |
+          set -eu
+          for fichier in \
+            coordination_x1000.py \
+            integration_x1000.py \
+            validation_moteurs.py \
+            moteurs/noyau_commun.py \
+            moteurs/m1.py \
+            moteurs/m2.py \
+            moteurs/m3.py \
+            moteurs/m4.py \
+            moteurs/m5.py \
+            api.py
+          do
+            test -f "$fichier" || {
+              echo "Fichier absent: $fichier"
+              exit 1
+            }
+          done
+
+      - name: Verifier syntaxe Python
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          fichiers = [
+              Path("coordination_x1000.py"),
+              Path("integration_x1000.py"),
+              Path("validation_moteurs.py"),
+              Path("api.py"),
+              *Path("moteurs").glob("*.py"),
+              *Path("tests").glob("test_*.py"),
+          ]
+          for fichier in fichiers:
+              ast.parse(
+                  fichier.read_text(encoding="utf-8"),
+                  filename=str(fichier),
+              )
+              print("OK:", fichier)
+          PY
+
+      - name: Tester les cinq moteurs
+        run: |
+          python - <<'PY'
+          import integration_x1000 as x
+
+          moteurs = x.charger_moteurs()
+          assert set(moteurs) == {
+              "M1", "M2", "M3", "M4", "M5"
+          }
+
+          course = x.creer_course_test()
+          resultat = x.executer_integration(course)
+
+          assert resultat["nombre_moteurs"] == 5
+          assert resultat["coordination_complete"]
+          assert set(
+              resultat["predictions_independantes"]
+          ) == set(moteurs)
+
+          for classement in resultat[
+              "predictions_independantes"
+          ].values():
+              assert len(classement) == 5
+              assert len(set(classement)) == 5
+              assert 7 not in classement
+
+          for protection in (
+              "publication_autorisee",
+              "fige_officiel",
+              "fige_automatique",
+              "validation_officielle",
+              "archives_modifiees",
+          ):
+              assert resultat[protection] is False
+
+          print("Integration M1-M5 : OK")
+          PY
+
+      - name: Executer tests de regression
+        run: |
+          python -m unittest discover \
+            -s tests \
+            -p "test_*.py" \
+            -v
+
+      - name: Verifier les routes API
+        run: |
+          python - <<'PY'
+          from api import app
+
+          attendues = {
+              "/api/status",
+              "/api/courses",
+              "/api/selections",
+              "/api/figes",
+              "/api/audits",
+              "/api/diagnostic",
+          }
+
+          routes = {
+              route.path: route.methods
+              for route in app.routes
+          }
+
+          assert attendues <= set(routes)
+
+          for chemin in attendues:
+              methodes = routes[chemin]
+              assert "GET" in methodes
+              assert "POST" not in methodes
+              assert "PUT" not in methodes
+              assert "PATCH" not in methodes
+              assert "DELETE" not in methodes
+
+          print("Routes API : OK")
+          PY
+
+      - name: Inventorier tableau de bord
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          candidats = [
+              Path("dashboard_x1000.html"),
+              Path("index.html"),
+              Path("docs/index.html"),
+          ]
+
+          presents = [
+              p for p in candidats if p.is_file()
+          ]
+
+          if not presents:
+              print(
+                  "ATTENTION: aucun tableau de bord "
+                  "trouve aux chemins attendus"
+              )
+          else:
+              for p in presents:
+                  print("Tableau de bord trouve:", p)
+
+          print(
+              "Integration navigateur/API : "
+              "non verifiee par ce workflow"
+          )
+          PY
+
+      - name: Controle final
+        run: |
+          echo "Audit technique termine"
+          echo "Aucune collecte PMU"
+          echo "Aucun FIGE automatique"
+          echo "Aucune publication"
+          echo "Aucune modification des archives"
