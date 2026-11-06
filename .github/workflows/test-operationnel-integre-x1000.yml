@@ -1,0 +1,233 @@
+name: X1000 - Test operationnel integre
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "moteurs/**"
+      - "coordination_x1000.py"
+      - "integration_x1000.py"
+      - "validation_moteurs.py"
+      - "api.py"
+      - "tests/**"
+      - ".github/workflows/test-operationnel-integre-x1000.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test-operationnel:
+    name: Validation integree M1-M5
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer dependances
+        run: |
+          python -m pip install \
+            "fastapi>=0.110,<1" \
+            "httpx>=0.27,<1"
+
+      - name: Verifier les modules
+        run: |
+          set -eu
+          for fichier in \
+            integration_x1000.py \
+            coordination_x1000.py \
+            validation_moteurs.py \
+            moteurs/noyau_commun.py \
+            moteurs/m1.py \
+            moteurs/m2.py \
+            moteurs/m3.py \
+            moteurs/m4.py \
+            moteurs/m5.py \
+            api.py
+          do
+            test -f "$fichier"
+          done
+
+      - name: Tester integration et coordination
+        run: |
+          python - <<'PY'
+          import copy
+          import re
+
+          import integration_x1000 as x
+          import coordination_x1000 as c
+
+          noms = {"M1", "M2", "M3", "M4", "M5"}
+          course = x.creer_course_test()
+          original = copy.deepcopy(course)
+
+          moteurs = x.charger_moteurs()
+          assert set(moteurs) == noms
+
+          sorties = {
+              nom: moteur.analyser_course(
+                  copy.deepcopy(course)
+              )
+              for nom, moteur in moteurs.items()
+          }
+
+          sauvegarde = copy.deepcopy(sorties)
+
+          resultat = x.executer_integration(
+              copy.deepcopy(course)
+          )
+
+          central = c.coordonner(
+              copy.deepcopy(course),
+              copy.deepcopy(sorties),
+          )
+
+          assert course == original
+          assert sorties == sauvegarde
+
+          for sortie in (resultat, central):
+              assert sortie["coordination_complete"]
+              assert sortie["nombre_moteurs"] == 5
+
+              predictions = sortie[
+                  "predictions_independantes"
+              ]
+
+              assert set(predictions) == noms
+
+              for nom, classement in predictions.items():
+                  assert len(classement) == 5, nom
+                  assert len(set(classement)) == 5
+                  assert 7 not in classement
+
+                  attendu = [
+                      p["numero"]
+                      for p in sorties[nom]["classement"]
+                  ]
+
+                  assert classement == attendu, nom
+
+              empreinte = sortie["empreinte_sha256"]
+              assert re.fullmatch(
+                  r"[0-9a-f]{64}", empreinte
+              )
+
+              for champ in (
+                  "publication_autorisee",
+                  "fige_officiel",
+                  "fige_automatique",
+                  "validation_officielle",
+                  "archives_modifiees",
+              ):
+                  assert sortie[champ] is False, champ
+
+          print("M1-M5 : OK")
+          print("Coordination centrale : OK")
+          print("Classements preserves : OK")
+          print("Protections : OK")
+          PY
+
+      - name: Tester les refus de securite
+        run: |
+          python - <<'PY'
+          import copy
+
+          import integration_x1000 as x
+          import coordination_x1000 as c
+          from validation_moteurs import ValidationErreur
+
+          course = x.creer_course_test()
+          moteurs = x.charger_moteurs()
+
+          sorties = {
+              nom: moteur.analyser_course(
+                  copy.deepcopy(course)
+              )
+              for nom, moteur in moteurs.items()
+          }
+
+          def doit_refuser(sorties_invalides):
+              try:
+                  c.coordonner(
+                      copy.deepcopy(course),
+                      sorties_invalides,
+                  )
+              except ValidationErreur:
+                  return
+              raise AssertionError(
+                  "Sortie dangereuse acceptee"
+              )
+
+          absence = copy.deepcopy(sorties)
+          del absence["M5"]
+          doit_refuser(absence)
+
+          for nom in moteurs:
+              for champ in ("fige", "publication"):
+                  invalides = copy.deepcopy(sorties)
+                  invalides[nom][champ] = True
+                  doit_refuser(invalides)
+
+          print("Refus des sorties interdites : OK")
+          PY
+
+      - name: Executer la regression complete
+        run: |
+          python -m unittest discover \
+            -s tests \
+            -p "test_*.py" \
+            -v
+
+      - name: Verifier API en lecture seule
+        run: |
+          python - <<'PY'
+          from api import app
+
+          attendues = {
+              "/api/status",
+              "/api/courses",
+              "/api/selections",
+              "/api/figes",
+              "/api/audits",
+              "/api/diagnostic",
+          }
+
+          routes = {
+              route.path: route.methods
+              for route in app.routes
+          }
+
+          assert attendues <= set(routes)
+
+          for chemin in attendues:
+              methodes = routes[chemin]
+              assert "GET" in methodes
+              assert not methodes.intersection({
+                  "POST", "PUT", "PATCH", "DELETE"
+              })
+
+          print("API lecture seule : OK")
+          PY
+
+      - name: Bilan final
+        run: |
+          echo "X1000 - CONTROLES TERMINES"
+          echo "M1-M5 verifies"
+          echo "Coordination centrale verifiee"
+          echo "Tests de regression executes"
+          echo "Routes API controlees"
+          echo "Aucun FIGE automatique"
+          echo "Aucune collecte PMU"
+          echo "Aucune publication"
+          echo "Aucune modification des archives"
+          echo "Tests fictifs uniquement"
