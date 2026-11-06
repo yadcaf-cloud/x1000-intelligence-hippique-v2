@@ -1,0 +1,69 @@
+name: X1000 - Validation autonomie M1-M5
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "moteurs/**"
+      - "integration_x1000.py"
+      - "coordination_x1000.py"
+      - "validation_moteurs.py"
+      - "tests/**"
+      - ".github/workflows/validation-autonomie-x1000.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validation-autonomie:
+    name: Controle autonomie X1000
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verifier les composants
+        run: |
+          set -eu
+          test -f integration_x1000.py
+          test -f coordination_x1000.py
+          test -f validation_moteurs.py
+          test -f moteurs/noyau_commun.py
+
+          for n in 1 2 3 4 5; do
+            test -f "moteurs/m${n}.py"
+          done
+
+      - name: Verifier la syntaxe Python
+        run: |
+          python -m compileall -q \
+            moteurs \
+            integration_x1000.py \
+            coordination_x1000.py \
+            validation_moteurs.py \
+            tests
+
+      - name: Executer les tests fonctionnels
+        run: |
+          python -m unittest discover \
+            -s tests \
+            -p "test_*.py" \
+            -v
+
+      - name: Confirmation
+        run: |
+          echo "Tests X1000 termines avec succes"
+          echo "Aucune collecte PMU par le workflow"
+          echo "Aucun FIGE cree par le workflow"
+          echo "Aucune publication par le workflow"
