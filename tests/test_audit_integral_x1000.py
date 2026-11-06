@@ -5,7 +5,18 @@
 X1000 INTELLIGENCE HIPPIQUE V2
 Audit integral M1-M5 et coordination centrale.
 
-Tests locaux sur course fictive.
+15 tests fonctionnels sur course fictive.
+
+- Cinq moteurs independants
+- Verification des identites et versions
+- Autotests individuels
+- Analyses et classements
+- Coordination et integration
+- Verification des protections
+- Determinisme des resultats
+- Simulation securisee d'une panne M3
+- Verification de non-mutation des entrees
+
 Aucune collecte PMU.
 Aucun FIGE automatique.
 Aucune publication.
@@ -42,6 +53,7 @@ class TestAuditIntegralX1000(unittest.TestCase):
 
     def sorties_valides(self):
         moteurs = integration.charger_moteurs()
+
         return {
             nom: moteurs[nom].analyser_course(
                 copy.deepcopy(self.course)
@@ -59,7 +71,11 @@ class TestAuditIntegralX1000(unittest.TestCase):
 
     def test_01_cinq_moteurs_charges(self):
         moteurs = integration.charger_moteurs()
-        self.assertEqual(set(moteurs), set(MOTEURS))
+
+        self.assertEqual(
+            set(moteurs),
+            set(MOTEURS)
+        )
 
     def test_02_identites_et_versions(self):
         for nom in MOTEURS:
@@ -67,11 +83,21 @@ class TestAuditIntegralX1000(unittest.TestCase):
                 module = importlib.import_module(
                     f"moteurs.{nom.lower()}"
                 )
-                self.assertEqual(module.MOTEUR, nom)
-                self.assertEqual(module.VERSION, "2.4")
+
+                self.assertEqual(
+                    module.MOTEUR,
+                    nom
+                )
+
+                self.assertEqual(
+                    module.VERSION,
+                    "2.4"
+                )
+
                 self.assertTrue(
                     callable(module.analyser_course)
                 )
+
                 module.verifier_noyau()
 
     def test_03_autotests_individuels(self):
@@ -80,27 +106,46 @@ class TestAuditIntegralX1000(unittest.TestCase):
                 module = importlib.import_module(
                     f"moteurs.{nom.lower()}"
                 )
-                self.assertTrue(module.self_test())
+
+                self.assertTrue(
+                    module.self_test()
+                )
 
     def test_04_analyses_independantes(self):
         sorties = self.sorties_valides()
 
-        self.assertEqual(set(sorties), set(MOTEURS))
+        self.assertEqual(
+            set(sorties),
+            set(MOTEURS)
+        )
 
         for nom, resultat in sorties.items():
             with self.subTest(moteur=nom):
                 self.assertEqual(
-                    resultat["moteur"], nom
-                )
-                self.assertIs(resultat["fige"], False)
-                self.assertIs(
-                    resultat["publication"], False
-                )
-                integration.verifier_resultat(
-                    nom, resultat, self.course
+                    resultat["moteur"],
+                    nom
                 )
 
-        self.assertEqual(self.course, self.reference)
+                self.assertIs(
+                    resultat["fige"],
+                    False
+                )
+
+                self.assertIs(
+                    resultat["publication"],
+                    False
+                )
+
+                integration.verifier_resultat(
+                    nom,
+                    resultat,
+                    self.course
+                )
+
+        self.assertEqual(
+            self.course,
+            self.reference
+        )
 
     def test_05_classements_coherents(self):
         sorties = self.sorties_valides()
@@ -112,7 +157,8 @@ class TestAuditIntegralX1000(unittest.TestCase):
 
                 if statut == "ANALYSE_DISPONIBLE":
                     self.assertEqual(
-                        len(classement), 5
+                        len(classement),
+                        5
                     )
 
                     numeros = [
@@ -125,37 +171,54 @@ class TestAuditIntegralX1000(unittest.TestCase):
                         len(set(numeros))
                     )
                 else:
-                    self.assertEqual(classement, [])
+                    self.assertEqual(
+                        classement,
+                        []
+                    )
 
     def test_06_coordination_integration(self):
         sorties = self.sorties_valides()
+
         resultat = integration.coordonner(
-            self.course, sorties
+            self.course,
+            sorties
         )
 
         self.assertEqual(
-            resultat["nombre_moteurs"], 5
+            resultat["nombre_moteurs"],
+            5
         )
+
         self.assertEqual(
             set(resultat["analyses_independantes"]),
             set(MOTEURS)
         )
+
         self.verifier_protections(resultat)
-        self.assertEqual(self.course, self.reference)
+
+        self.assertEqual(
+            self.course,
+            self.reference
+        )
 
     def test_07_coordination_centrale(self):
         sorties = self.sorties_valides()
+
         resultat = central.coordonner(
-            self.course, sorties
+            self.course,
+            sorties
         )
 
         self.assertEqual(
-            resultat["nombre_moteurs"], 5
+            resultat["nombre_moteurs"],
+            5
         )
+
         self.assertEqual(
             set(resultat["analyses_independantes"]),
             set(MOTEURS)
         )
+
         self.verifier_protections(resultat)
 
     def test_08_execution_complete(self):
@@ -164,45 +227,59 @@ class TestAuditIntegralX1000(unittest.TestCase):
         )
 
         self.assertEqual(
-            resultat["nombre_moteurs"], 5
+            resultat["nombre_moteurs"],
+            5
         )
+
         self.verifier_protections(resultat)
-        self.assertEqual(self.course, self.reference)
+
+        self.assertEqual(
+            self.course,
+            self.reference
+        )
 
     def test_09_moteur_manquant_refuse(self):
         sorties = self.sorties_valides()
+
         del sorties["M5"]
 
         with self.assertRaises(ValidationErreur):
             integration.coordonner(
-                self.course, sorties
+                self.course,
+                sorties
             )
 
     def test_10_identite_falsifiee_refusee(self):
         sorties = self.sorties_valides()
+
         sorties["M1"]["moteur"] = "M2"
 
         with self.assertRaises(ValidationErreur):
             integration.coordonner(
-                self.course, sorties
+                self.course,
+                sorties
             )
 
     def test_11_fige_interdit(self):
         sorties = self.sorties_valides()
+
         sorties["M1"]["fige"] = True
 
         with self.assertRaises(ValidationErreur):
             integration.coordonner(
-                self.course, sorties
+                self.course,
+                sorties
             )
 
     def test_12_publication_interdite(self):
         sorties = self.sorties_valides()
+
         sorties["M2"]["publication"] = True
 
         with self.assertRaises(ValidationErreur):
             integration.coordonner(
-                self.course, sorties
+                self.course,
+                sorties
             )
 
     def test_13_resultats_deterministes(self):
@@ -213,6 +290,7 @@ class TestAuditIntegralX1000(unittest.TestCase):
                 premier = moteurs[nom].analyser_course(
                     copy.deepcopy(self.course)
                 )
+
                 second = moteurs[nom].analyser_course(
                     copy.deepcopy(self.course)
                 )
@@ -221,40 +299,68 @@ class TestAuditIntegralX1000(unittest.TestCase):
                     premier["statut"],
                     second["statut"]
                 )
+
                 self.assertEqual(
                     premier["classement"],
                     second["classement"]
                 )
+
                 self.assertEqual(
                     premier["classement_partiel"],
                     second["classement_partiel"]
                 )
 
     def test_14_erreur_moteur_interrompt(self):
+        """
+        Simule une panne du moteur M3.
+
+        Correction :
+        Ne jamais copier directement un module Python.
+
+        patch.object remplace temporairement
+        analyser_course et restaure automatiquement
+        la fonction originale apres le test.
+        """
+
         moteurs = integration.charger_moteurs()
 
         def erreur_simulee(course):
             raise RuntimeError("Panne fictive M3")
 
-        moteurs = dict(moteurs)
-        moteur_m3 = copy.copy(moteurs["M3"])
-        moteur_m3.analyser_course = erreur_simulee
-        moteurs["M3"] = moteur_m3
-
         with patch.object(
-            integration,
-            "charger_moteurs",
-            return_value=moteurs
+            moteurs["M3"],
+            "analyser_course",
+            side_effect=erreur_simulee
         ):
-            with self.assertRaises(RuntimeError):
-                integration.executer_integration(
-                    copy.deepcopy(self.course)
-                )
+            with patch.object(
+                integration,
+                "charger_moteurs",
+                return_value=moteurs
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Panne fictive M3"
+                ):
+                    integration.executer_integration(
+                        copy.deepcopy(self.course)
+                    )
+
+        # Verification de la restauration du moteur.
+        self.assertTrue(
+            callable(moteurs["M3"].analyser_course)
+        )
+
+        # Verification de l'integrite des donnees.
+        self.assertEqual(
+            self.course,
+            self.reference
+        )
 
     def test_15_aucune_mutation_entree(self):
         integration.executer_integration(
             copy.deepcopy(self.course)
         )
+
         self.assertEqual(
             self.course,
             self.reference
