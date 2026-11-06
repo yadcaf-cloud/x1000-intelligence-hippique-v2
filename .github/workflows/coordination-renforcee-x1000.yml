@@ -65,17 +65,16 @@ jobs:
 
       - name: Executer les tests renforces
         run: |
-          python -m unittest \
-            discover \
+          python -m unittest discover \
             -s tests \
             -p "test_coordination_renforcee_x1000.py" \
             -v
 
-      - name: Confirmation de securite
+      - name: Confirmation des tests
         if: success()
         run: |
-          echo "Coordination centrale : tests reussis"
-          echo "M1-M5 : aucune modification"
-          echo "FIGES : aucune creation"
-          echo "Publication : aucune"
-          echo "Archives : aucune modification"
+          echo "Tests de coordination reussis"
+          echo "Aucune collecte PMU"
+          echo "Aucun FIGE automatique"
+          echo "Aucune publication"
+          echo "Aucune modification des archives"
