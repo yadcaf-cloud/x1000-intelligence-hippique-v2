@@ -2,6 +2,7 @@ name: X1000 - Validation autonomie M1-M5
 
 on:
   workflow_dispatch:
+
   push:
     branches:
       - fix/x1000-v2-reparation-controlee
@@ -10,6 +11,7 @@ on:
       - "integration_x1000.py"
       - "coordination_x1000.py"
       - "validation_moteurs.py"
+      - "api.py"
       - "tests/**"
       - ".github/workflows/validation-autonomie-x1000.yml"
 
@@ -33,17 +35,31 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Installer les dependances API
+        run: |
+          set -eu
+          python -m pip install --upgrade pip
+          python -m pip install \
+            "fastapi>=0.110,<1" \
+            "httpx>=0.27,<1"
+
       - name: Verifier les composants
         run: |
           set -eu
+
           test -f integration_x1000.py
           test -f coordination_x1000.py
           test -f validation_moteurs.py
           test -f moteurs/noyau_commun.py
+          test -f api.py
 
           for n in 1 2 3 4 5; do
             test -f "moteurs/m${n}.py"
           done
+
+      - name: Verifier les dependances API
+        run: |
+          python -c "import fastapi, httpx; print('Dependances API disponibles')"
 
       - name: Verifier la syntaxe Python
         run: |
@@ -52,6 +68,7 @@ jobs:
             integration_x1000.py \
             coordination_x1000.py \
             validation_moteurs.py \
+            api.py \
             tests
 
       - name: Executer les tests fonctionnels
@@ -64,6 +81,9 @@ jobs:
       - name: Confirmation
         run: |
           echo "Tests X1000 termines avec succes"
+          echo "Moteurs M1-M5 controles"
+          echo "Dependances API disponibles"
           echo "Aucune collecte PMU par le workflow"
           echo "Aucun FIGE cree par le workflow"
           echo "Aucune publication par le workflow"
+          echo "Aucune modification des archives par le workflow"
