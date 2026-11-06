@@ -1,0 +1,73 @@
+name: X1000 - Securite integration M1-M5
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "moteurs/**"
+      - "integration_x1000.py"
+      - "coordination_x1000.py"
+      - "validation_moteurs.py"
+      - "tests/test_securite_integration_x1000.py"
+      - ".github/workflows/securite-integration-x1000.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  securite-integration:
+    name: Controle securite M1-M5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verifier les fichiers
+        run: |
+          set -eu
+          test -f integration_x1000.py
+          test -f coordination_x1000.py
+          test -f validation_moteurs.py
+          test -f moteurs/noyau_commun.py
+          test -f tests/test_securite_integration_x1000.py
+
+          for n in 1 2 3 4 5; do
+            test -f "moteurs/m${n}.py"
+          done
+
+      - name: Verifier syntaxe Python
+        run: |
+          python -m compileall -q \
+            integration_x1000.py \
+            coordination_x1000.py \
+            validation_moteurs.py \
+            moteurs \
+            tests/test_securite_integration_x1000.py
+
+      - name: Executer les tests de securite
+        run: |
+          python -m unittest \
+            discover \
+            -s tests \
+            -p "test_securite_integration_x1000.py" \
+            -v
+
+      - name: Controle final
+        if: success()
+        run: |
+          echo "Tests de securite reussis"
+          echo "Aucune collecte PMU"
+          echo "Aucun FIGE automatique"
+          echo "Aucune publication"
+          echo "Aucune modification des archives"
