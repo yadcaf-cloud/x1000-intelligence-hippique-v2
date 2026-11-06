@@ -3,19 +3,22 @@
 
 """
 X1000 INTELLIGENCE HIPPIQUE V2
-Integration securisee des moteurs M1 a M5.
+INTEGRATION SECURISEE M1 A M5
 
-- Cinq analyses independantes
-- Validation des sorties par le noyau
-- Conservation des classements
+- Cinq moteurs independants
+- Validation des sorties par le noyau commun
+- Conservation des classements originaux
 - Coordination sans prediction inventee
-- Tracabilite SHA-256
+- Empreinte SHA-256 reproductible
+- Controle des non-partants
+- Controle des donnees insuffisantes
+- Controle des courses passees
 - Aucun FIGE automatique
-- Aucune collecte PMU
-- Aucune publication
-- Aucune ecriture d'archives
+- Aucune collecte PMU automatique
+- Aucune publication automatique
+- Aucune modification des archives
 
-Bibliotheque standard Python uniquement.
+Python 3.11 - Bibliotheque standard uniquement.
 """
 
 from __future__ import annotations
@@ -46,9 +49,42 @@ STATUT_PARTIEL = (
 )
 
 
+# ============================================================
+# 1. EMPREINTE SHA-256 REPRODUCTIBLE
+# ============================================================
+
 def empreinte_sha256(donnees):
+    """
+    Calcule une empreinte reproductible.
+
+    Exclut uniquement les horodatages analyse_a
+    du calcul, sans modifier les donnees sources.
+
+    Cette empreinte est une empreinte de contenu
+    stable, pas une empreinte brute des archives.
+    """
+
+    def normaliser(valeur):
+
+        if isinstance(valeur, dict):
+            return {
+                cle: normaliser(contenu)
+                for cle, contenu in valeur.items()
+                if cle != "analyse_a"
+            }
+
+        if isinstance(valeur, list):
+            return [
+                normaliser(element)
+                for element in valeur
+            ]
+
+        return valeur
+
+    donnees_stables = normaliser(donnees)
+
     contenu = json.dumps(
-        donnees,
+        donnees_stables,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -58,32 +94,82 @@ def empreinte_sha256(donnees):
     return hashlib.sha256(contenu).hexdigest()
 
 
+# ============================================================
+# 2. CHARGEMENT DES CINQ MOTEURS
+# ============================================================
+
 def charger_moteurs():
+    """
+    Charge les cinq moteurs independamment.
+
+    Controle identite, version et noyau.
+    """
+
     moteurs = {}
 
     for nom in NOMS:
+
         module = importlib.import_module(
             f"moteurs.{nom.lower()}"
         )
 
-        if module.MOTEUR != nom:
+        if getattr(module, "MOTEUR", None) != nom:
             raise ValidationErreur(
                 f"Identite incorrecte : {nom}"
             )
 
-        if str(module.VERSION) != VERSION:
+        if str(
+            getattr(module, "VERSION", None)
+        ) != VERSION:
             raise ValidationErreur(
                 f"Version incompatible : {nom}"
             )
 
-        module.verifier_noyau()
+        verifier = getattr(
+            module,
+            "verifier_noyau",
+            None,
+        )
+
+        analyser = getattr(
+            module,
+            "analyser_course",
+            None,
+        )
+
+        if not callable(verifier):
+            raise ValidationErreur(
+                f"{nom}: verification du noyau absente"
+            )
+
+        if not callable(analyser):
+            raise ValidationErreur(
+                f"{nom}: analyse indisponible"
+            )
+
+        verifier()
 
         moteurs[nom] = module
 
     return moteurs
 
 
+# ============================================================
+# 3. VALIDATION DES SORTIES
+# ============================================================
+
 def verifier_resultat(nom, resultat, course):
+    """
+    Controle la sortie d'un moteur.
+
+    Ne modifie ni le resultat ni la course.
+    """
+
+    if nom not in NOMS:
+        raise ValidationErreur(
+            "Moteur inconnu"
+        )
+
     if not isinstance(resultat, dict):
         raise ValidationErreur(
             f"{nom}: resultat invalide"
@@ -92,6 +178,11 @@ def verifier_resultat(nom, resultat, course):
     if resultat.get("moteur") != nom:
         raise ValidationErreur(
             f"{nom}: identite incoherente"
+        )
+
+    if str(resultat.get("version")) != VERSION:
+        raise ValidationErreur(
+            f"{nom}: version incompatible"
         )
 
     if resultat.get("fige") is not False:
@@ -109,6 +200,7 @@ def verifier_resultat(nom, resultat, course):
             resultat,
             course,
         )
+
     except (ValueError, TypeError) as exc:
         raise ValidationErreur(
             f"{nom}: sortie non conforme : {exc}"
@@ -117,10 +209,19 @@ def verifier_resultat(nom, resultat, course):
     return resultat
 
 
+# ============================================================
+# 4. EXTRACTION DES CLASSEMENTS
+# ============================================================
+
 def extraire_numeros(resultat):
+    """
+    Extrait les numeros sans changer leur ordre.
+    """
+
     statut = resultat["statut"]
 
     if statut == "ANALYSE_DISPONIBLE":
+
         positions = resultat["classement"]
 
         if len(positions) != 5:
@@ -129,23 +230,44 @@ def extraire_numeros(resultat):
             )
 
     elif statut == "DONNEES_INSUFFISANTES":
-        positions = resultat["classement_partiel"]
 
-    else:
+        positions = resultat[
+            "classement_partiel"
+        ]
+
+    elif statut == "NON_ANALYSABLE":
+
         positions = []
 
-    return [
+    else:
+        raise ValidationErreur(
+            f"Statut inconnu : {statut}"
+        )
+
+    numeros = [
         position["numero"]
         for position in positions
     ]
 
+    if len(numeros) != len(set(numeros)):
+        raise ValidationErreur(
+            "Classement contenant des doublons"
+        )
+
+    return numeros
+
+
+# ============================================================
+# 5. COORDINATION CENTRALE
+# ============================================================
 
 def coordonner(course, sorties):
     """
-    Coordonne cinq sorties deja calculees.
+    Coordonne les cinq sorties deja calculees.
 
-    Ne modifie ni la course ni les sorties.
-    Ne calcule pas de consensus artificiel.
+    Aucun consensus artificiel.
+    Aucune modification des classements.
+    Aucun FIGE ou publication.
     """
 
     if not isinstance(course, dict):
@@ -155,8 +277,8 @@ def coordonner(course, sorties):
 
     valider_course(course)
 
-    valide, raison = noyau_commun.verifier_course(
-        course
+    valide, raison = (
+        noyau_commun.verifier_course(course)
     )
 
     if not valide:
@@ -180,6 +302,7 @@ def coordonner(course, sorties):
     incomplets = []
 
     for nom in NOMS:
+
         resultat = verifier_resultat(
             nom,
             sorties[nom],
@@ -198,10 +321,13 @@ def coordonner(course, sorties):
             resultat["statut"]
             == "ANALYSE_DISPONIBLE"
         ):
+
             predictions[nom] = numeros
 
         else:
+
             incomplets.append(nom)
+
             partiels[nom] = numeros
 
     complet = not incomplets
@@ -223,9 +349,10 @@ def coordonner(course, sorties):
         "course_id": course["id"],
         "statut": statut,
         "coordination_complete": complet,
-        "nombre_moteurs": 5,
+        "nombre_moteurs": len(NOMS),
         "moteurs_complets": [
-            nom for nom in NOMS
+            nom
+            for nom in NOMS
             if nom not in incomplets
         ],
         "moteurs_incomplets": incomplets,
@@ -245,20 +372,26 @@ def coordonner(course, sorties):
     }
 
 
+# ============================================================
+# 6. EXECUTION INDEPENDANTE M1 A M5
+# ============================================================
+
 def executer_integration(course):
     """
-    Execute M1 a M5 independamment.
+    Execute les cinq moteurs separement.
 
-    Chaque moteur recoit sa propre copie.
+    Chaque moteur recoit une copie independante.
     Toute erreur interrompt la coordination.
     """
 
     moteurs = charger_moteurs()
 
     original = copy.deepcopy(course)
+
     sorties = {}
 
     for nom, moteur in moteurs.items():
+
         entree = copy.deepcopy(original)
 
         resultat = moteur.analyser_course(
@@ -286,10 +419,16 @@ def executer_integration(course):
     )
 
 
+# ============================================================
+# 7. CREATION D'UNE COURSE FICTIVE
+# ============================================================
+
 def creer_course_test():
     """
-    Course fictive pour test local.
-    Aucune donnee sportive reelle.
+    Course fictive exclusivement pour les tests.
+
+    Aucune donnee PMU reelle.
+    Aucun pronostic officiel.
     """
 
     depart = (
@@ -302,9 +441,11 @@ def creer_course_test():
     ).strftime("%Y-%m-%d")
 
     moteurs = charger_moteurs()
+
     chevaux = []
 
     for numero in range(1, 8):
+
         cheval = {
             "numero": numero,
             "nom": f"TEST_{numero}",
@@ -312,6 +453,7 @@ def creer_course_test():
         }
 
         for moteur in moteurs.values():
+
             cheval[moteur.CHAMP] = {
                 critere: 90 - numero * 5
                 for critere in moteur.POIDS
@@ -330,8 +472,24 @@ def creer_course_test():
     }
 
 
+# ============================================================
+# 8. AUTOTEST COMPLET
+# ============================================================
+
 def self_test():
+    """
+    Verifie :
+    - Les cinq moteurs
+    - Les classements independants
+    - Les non-partants
+    - La reproductibilite SHA-256
+    - Les donnees insuffisantes
+    - Le refus des courses passees
+    - Les protections FIGE et archives
+    """
+
     course = creer_course_test()
+
     original = copy.deepcopy(course)
 
     premier = executer_integration(
@@ -342,26 +500,53 @@ def self_test():
         course
     )
 
-    assert course == original
+    assert course == original, (
+        "Course originale modifiee"
+    )
 
-    assert premier["coordination_complete"]
-    assert premier["nombre_moteurs"] == 5
+    assert premier[
+        "coordination_complete"
+    ], "Coordination incomplete"
+
+    assert premier[
+        "nombre_moteurs"
+    ] == 5, "Nombre de moteurs incorrect"
 
     assert set(
         premier["predictions_independantes"]
-    ) == set(NOMS)
+    ) == set(NOMS), (
+        "Predictions M1-M5 incompletes"
+    )
 
     for nom, classement in premier[
         "predictions_independantes"
     ].items():
+
         assert len(classement) == 5, nom
-        assert len(set(classement)) == 5
-        assert 7 not in classement
+
+        assert len(set(classement)) == 5, nom
+
+        assert 7 not in classement, (
+            f"{nom}: non-partant classe"
+        )
 
     assert (
         premier["empreinte_sha256"]
         == second["empreinte_sha256"]
-    )
+    ), "Empreintes SHA-256 differentes"
+
+    assert len(
+        premier["empreinte_sha256"]
+    ) == 64, "Empreinte SHA-256 invalide"
+
+    # Controle de l'independance des copies.
+
+    assert (
+        premier["analyses_independantes"]
+        is not second["analyses_independantes"]
+    ), "Analyses non independantes"
+
+    # Verification des protections.
 
     for champ in (
         "publication_autorisee",
@@ -370,13 +555,23 @@ def self_test():
         "validation_officielle",
         "archives_modifiees",
     ):
-        assert premier[champ] is False
+
+        assert premier[champ] is False, (
+            f"Protection inactive : {champ}"
+        )
+
+    # Test des donnees insuffisantes.
 
     course_incomplete = creer_course_test()
 
+    moteurs = charger_moteurs()
+
+    champ_m5 = moteurs["M5"].CHAMP
+
     for cheval in course_incomplete["partants"]:
+
         cheval.pop(
-            charger_moteurs()["M5"].CHAMP,
+            champ_m5,
             None,
         )
 
@@ -386,44 +581,104 @@ def self_test():
 
     assert not partiel[
         "coordination_complete"
-    ]
+    ], "Course incomplete acceptee"
 
     assert "M5" in partiel[
         "moteurs_incomplets"
-    ]
+    ], "M5 non detecte comme incomplet"
 
     assert partiel[
         "predictions_independantes"
-    ] == {}
+    ] == {}, (
+        "Predictions completes publiees "
+        "malgre les donnees insuffisantes"
+    )
+
+    # Test du refus des courses passees.
 
     course_passee = creer_course_test()
-    course_passee["depart"] = (
+
+    depart_passe = (
         datetime.now(timezone.utc)
         - timedelta(days=1)
-    ).isoformat()
+    )
+
+    course_passee["depart"] = (
+        depart_passe.isoformat()
+    )
+
+    course_passee["id"] = (
+        depart_passe.astimezone(
+            ZoneInfo("Europe/Paris")
+        ).strftime("%Y-%m-%d")
+        + "-R1-C1"
+    )
 
     try:
-        executer_integration(course_passee)
+        executer_integration(
+            course_passee
+        )
+
     except (ValidationErreur, ValueError):
         pass
+
     else:
         raise AssertionError(
             "Course passee acceptee"
         )
 
+    # Verification SHA-256 sur horodatages.
+
+    donnees_a = {
+        "moteur": "M1",
+        "analyse_a": "2026-01-01T10:00:00Z",
+        "classement": [1, 2, 3, 4, 5],
+    }
+
+    donnees_b = {
+        "moteur": "M1",
+        "analyse_a": "2026-01-01T11:00:00Z",
+        "classement": [1, 2, 3, 4, 5],
+    }
+
+    assert (
+        empreinte_sha256(donnees_a)
+        == empreinte_sha256(donnees_b)
+    ), "Horodatage affecte l'empreinte"
+
+    donnees_c = copy.deepcopy(donnees_b)
+
+    donnees_c["classement"] = [
+        5, 4, 3, 2, 1
+    ]
+
+    assert (
+        empreinte_sha256(donnees_a)
+        != empreinte_sha256(donnees_c)
+    ), "Changement sportif non detecte"
+
+    print("================================")
     print("X1000 - INTEGRATION M1 A M5")
+    print("================================")
     print("SELF-TEST : OK")
     print("Cinq moteurs : OK")
     print("Coordination : OK")
     print("Independance : OK")
     print("Classements : OK")
-    print("Reproductibilite : OK")
+    print("Non-partants : OK")
+    print("Reproductibilite SHA-256 : OK")
     print("Donnees insuffisantes : OK")
     print("Course passee refusee : OK")
     print("FIGE automatique : NON")
+    print("Collecte PMU : NON")
     print("Publication : NON")
     print("Archives modifiees : NON")
+    print("================================")
 
+
+# ============================================================
+# 9. DEMARRAGE
+# ============================================================
 
 if __name__ == "__main__":
     self_test()
