@@ -1,0 +1,83 @@
+name: X1000 - Audit integral M1-M5
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "moteurs/**"
+      - "integration_x1000.py"
+      - "coordination_x1000.py"
+      - "validation_moteurs.py"
+      - "tests/test_audit_integral_x1000.py"
+      - ".github/workflows/audit-integral-x1000.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit-integral:
+    name: Audit complet des cinq moteurs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verifier les composants
+        run: |
+          set -eu
+
+          test -f integration_x1000.py
+          test -f coordination_x1000.py
+          test -f validation_moteurs.py
+          test -f moteurs/noyau_commun.py
+          test -f tests/test_audit_integral_x1000.py
+
+          for n in 1 2 3 4 5; do
+            test -f "moteurs/m${n}.py"
+          done
+
+      - name: Compiler les modules
+        run: |
+          python -m compileall -q \
+            integration_x1000.py \
+            coordination_x1000.py \
+            validation_moteurs.py \
+            moteurs \
+            tests/test_audit_integral_x1000.py
+
+      - name: Tester chaque moteur
+        run: |
+          set -eu
+
+          for n in 1 2 3 4 5; do
+            python -m "moteurs.m${n}" --self-test
+          done
+
+      - name: Audit integral M1-M5
+        run: |
+          python -m unittest \
+            discover \
+            -s tests \
+            -p "test_audit_integral_x1000.py" \
+            -v
+
+      - name: Bilan
+        if: success()
+        run: |
+          echo "Audit integral X1000 : OK"
+          echo "Moteurs M1-M5 controles"
+          echo "Coordination centrale controlee"
+          echo "Aucun FIGE cree"
+          echo "Aucune publication effectuee"
+          echo "Aucune archive modifiee"
