@@ -2,32 +2,31 @@
 # -*- coding: utf-8 -*-
 
 """
-X1000 V2.4 - COORDINATION SECURISEE M1 A M5
+X1000 INTELLIGENCE HIPPIQUE V2
+COORDINATION CENTRALE SECURISEE M1-M5
 
-MISSION :
-- Valider les courses PMU physiquement disputees en France.
-- Coordonner cinq analyses independantes deja calculees.
-- Accepter les classements detailles du noyau commun.
-- Extraire les numeros des chevaux sans modifier les analyses.
-- Conserver les classements complets et partiels.
-- Refuser les donnees incoherentes ou inventees.
-- Produire une empreinte SHA-256 de tracabilite.
+Version 2.4 - Correction de compatibilite du noyau
 
-SECURITE :
-- Aucun moteur execute automatiquement.
-- Aucune collecte PMU.
-- Aucune prediction inventee.
-- Aucun FIGE automatique ou retroactif.
-- Aucune publication.
-- Aucune modification des archives.
-- Aucune ecriture de fichiers.
-- Aucune validation officielle automatique.
+- Cinq moteurs independants
+- Validation des courses et des sorties
+- Classements complets et partiels
+- Controle des non-partants
+- Controle des scores et des doublons
+- Conservation des decisions sportives
+- Tracabilite SHA-256
+- Aucun pronostic invente
+- Aucun FIGE automatique
+- Aucune collecte PMU
+- Aucune publication automatique
+- Aucune modification des archives
+- Aucune ecriture de fichiers
 
-Validation technique locale uniquement.
+Python 3.11 - Bibliotheque standard uniquement.
 """
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -35,14 +34,14 @@ import math
 from datetime import datetime, timezone
 from typing import Any
 
+from moteurs import noyau_commun
+
 from validation_moteurs import (
     MOTEURS,
     ValidationErreur,
     valider_course,
     valider_prediction,
 )
-
-from moteurs import noyau_commun
 
 
 VERSION = "2.4"
@@ -68,6 +67,11 @@ def verifier_identifiant(
     course: dict[str, Any],
 ) -> str | int:
 
+    if not isinstance(course, dict):
+        raise ValidationErreur(
+            "Course invalide"
+        )
+
     identifiant = course.get("id")
 
     if (
@@ -85,9 +89,7 @@ def verifier_identifiant(
 # 2. VALIDATION DES CINQ MOTEURS
 # ============================================================
 
-def verifier_sorties(
-    sorties: Any,
-) -> None:
+def verifier_sorties(sorties: Any) -> None:
 
     if not isinstance(sorties, dict):
         raise ValidationErreur(
@@ -101,7 +103,7 @@ def verifier_sorties(
 
 
 # ============================================================
-# 3. CONTROLE DES SCORES
+# 3. VALIDATION DES SCORES
 # ============================================================
 
 def verifier_note(
@@ -129,7 +131,7 @@ def verifier_note(
 
 
 # ============================================================
-# 4. EXTRACTION DES CLASSEMENTS DETAILLES
+# 4. EXTRACTION DES CLASSEMENTS
 # ============================================================
 
 def extraire_classement(
@@ -139,40 +141,18 @@ def extraire_classement(
     complet: bool,
     partants: dict[int, str],
 ) -> tuple[list[int], list[dict[str, Any]]]:
-    """
-    Convertit un classement detaille en numeros.
-
-    Exemple :
-        [
-            {
-                "position_predite": 1,
-                "numero": 9,
-                "nom": "Cheval A",
-                "score": 82.5,
-                "couverture": 1.0,
-                "risques": []
-            }
-        ]
-
-    Devient :
-        [9]
-
-    Les details originaux sont conserves.
-    """
 
     if not isinstance(positions, list):
         raise ValidationErreur(
             f"{moteur}: classement invalide"
         )
 
-    limite = 5 if complet else 4
-
     if complet and len(positions) != 5:
         raise ValidationErreur(
             f"{moteur}: cinq positions exigees"
         )
 
-    if not complet and len(positions) > limite:
+    if not complet and len(positions) > 4:
         raise ValidationErreur(
             f"{moteur}: classement partiel trop long"
         )
@@ -190,12 +170,8 @@ def extraire_classement(
                 f"{moteur}: position detaillee invalide"
             )
 
-        rang = position.get(
-            "position_predite"
-        )
-
+        rang = position.get("position_predite")
         numero = position.get("numero")
-
         nom = position.get("nom")
 
         if type(rang) is not int or rang != index:
@@ -210,7 +186,7 @@ def extraire_classement(
 
         if numero not in actifs:
             raise ValidationErreur(
-                f"{moteur}: cheval non-partant ou inconnu"
+                f"{moteur}: cheval inconnu ou non-partant"
             )
 
         if numero in numeros:
@@ -232,12 +208,9 @@ def extraire_classement(
             f"{moteur} score",
         )
 
-        couverture = position.get(
-            "couverture"
-        )
+        couverture = position.get("couverture")
 
         if couverture is not None:
-
             if (
                 type(couverture) not in (int, float)
                 or not math.isfinite(couverture)
@@ -255,8 +228,7 @@ def extraire_classement(
             )
 
         numeros.append(numero)
-
-        details.append(position.copy())
+        details.append(copy.deepcopy(position))
 
     if complet:
         valider_prediction(
@@ -269,7 +241,7 @@ def extraire_classement(
 
 
 # ============================================================
-# 5. ADAPTATION D'UN RESULTAT MOTEUR
+# 5. ADAPTATION DES SORTIES MOTEURS
 # ============================================================
 
 def adapter_sortie_moteur(
@@ -280,17 +252,8 @@ def adapter_sortie_moteur(
     identifiant: str | int,
     partants: dict[int, str],
 ) -> dict[str, Any]:
-    """
-    Accepte :
-    - Le format historique de cinq numeros.
-    - Le format structure V2.4 du noyau commun.
 
-    Les classements partiels restent partiels.
-    """
-
-    # --------------------------------------------------------
-    # A. FORMAT HISTORIQUE
-    # --------------------------------------------------------
+    # Format historique : cinq numeros.
 
     if isinstance(sortie, list):
 
@@ -313,9 +276,7 @@ def adapter_sortie_moteur(
             ),
         }
 
-    # --------------------------------------------------------
-    # B. FORMAT STRUCTURE V2.4
-    # --------------------------------------------------------
+    # Format structure V2.4.
 
     if not isinstance(sortie, dict):
         raise ValidationErreur(
@@ -353,18 +314,19 @@ def adapter_sortie_moteur(
             f"{moteur}: statut non autorise"
         )
 
-    # Verification par le noyau commun.
-    # Cette fonction doit refuser toute sortie invalide.
+    # CORRECTION PRINCIPALE :
+    # Le resultat est le premier argument.
+    # La course est le second argument.
 
     try:
         noyau_commun.verifier_sortie_analyse(
-            course,
             sortie,
+            course=course,
         )
 
     except (ValueError, TypeError) as exc:
         raise ValidationErreur(
-            f"{moteur}: validation noyau echouee"
+            f"{moteur}: validation noyau echouee: {exc}"
         ) from exc
 
     complet = (
@@ -458,7 +420,7 @@ def adapter_sortie_moteur(
 
 
 # ============================================================
-# 6. EMPREINTE DE TRACABILITE
+# 6. EMPREINTE SHA-256
 # ============================================================
 
 def calculer_empreinte(
@@ -467,7 +429,6 @@ def calculer_empreinte(
 ) -> str:
 
     try:
-
         contenu = json.dumps(
             {
                 "version": VERSION,
@@ -485,7 +446,6 @@ def calculer_empreinte(
         ValueError,
         OverflowError,
     ) as exc:
-
         raise ValidationErreur(
             "Donnees non serialisables "
             "pour la tracabilite"
@@ -497,30 +457,21 @@ def calculer_empreinte(
 
 
 # ============================================================
-# 7. COORDINATION CENTRALE
+# 7. COORDINATION CENTRALE M1-M5
 # ============================================================
 
 def coordonner(
     course: dict[str, Any],
     sorties: dict[str, Any],
 ) -> dict[str, Any]:
-    """
-    Coordonne les cinq moteurs sans les executer.
 
-    Retourne :
-    - VALIDE_NON_PUBLIE si les cinq sont complets.
-    - COORDINATION_INCOMPLETE_NON_PUBLIE sinon.
-    """
-
-    # Validation initiale de la course.
+    # Validation initiale.
 
     actifs = valider_course(course)
 
     identifiant = verifier_identifiant(
         course
     )
-
-    # Validation complementaire du noyau.
 
     valide, raison = (
         noyau_commun.verifier_course(course)
@@ -544,7 +495,7 @@ def coordonner(
     predictions = {}
     incomplets = []
 
-    # Chaque moteur conserve son classement.
+    # Les cinq moteurs sont traites separement.
 
     for moteur in MOTEURS:
 
@@ -563,13 +514,11 @@ def coordonner(
             analyse["statut"]
             == "ANALYSE_DISPONIBLE"
         ):
-
             predictions[moteur] = (
                 analyse["classement"].copy()
             )
 
         else:
-
             incomplets.append(moteur)
 
     complet = len(incomplets) == 0
@@ -587,19 +536,13 @@ def coordonner(
 
     return {
         "version": VERSION,
-
         "statut": statut_global,
-
         "course_id": identifiant,
-
         "valide_a": datetime.now(
             timezone.utc
         ).isoformat(),
-
         "empreinte_sha256": empreinte,
-
         "coordination_complete": complet,
-
         "nombre_moteurs": len(MOTEURS),
 
         "moteurs_complets": [
@@ -612,6 +555,9 @@ def coordonner(
 
         "analyses_independantes": analyses,
 
+        # Contrat historique conserve :
+        # pas de predictions completes exposees
+        # si la coordination est incomplete.
         "predictions_independantes": (
             predictions if complet else {}
         ),
@@ -624,13 +570,9 @@ def coordonner(
         },
 
         "publication_autorisee": False,
-
         "fige_officiel": False,
-
         "fige_automatique": False,
-
         "validation_officielle": False,
-
         "archives_modifiees": False,
     }
 
@@ -651,7 +593,7 @@ def coordonner_predictions(
 
 
 # ============================================================
-# 9. EXECUTION DIRECTE
+# 9. DEMARRAGE SECURISE
 # ============================================================
 
 if __name__ == "__main__":
