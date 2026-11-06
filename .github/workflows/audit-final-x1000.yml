@@ -1,0 +1,75 @@
+name: X1000 - Audit final M1-M5
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - "coordination_x1000.py"
+      - "integration_x1000.py"
+      - "validation_moteurs.py"
+      - "moteurs/**"
+      - "tests/test_audit_final_x1000.py"
+      - ".github/workflows/audit-final-x1000.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit-final:
+    name: Audit final des cinq moteurs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verifier les fichiers
+        run: |
+          set -e
+          test -f coordination_x1000.py
+          test -f integration_x1000.py
+          test -f validation_moteurs.py
+          test -f moteurs/noyau_commun.py
+          test -f tests/test_audit_final_x1000.py
+
+          for n in 1 2 3 4 5; do
+            test -f "moteurs/m${n}.py"
+          done
+
+      - name: Verifier la syntaxe Python
+        run: |
+          python -m compileall -q \
+            coordination_x1000.py \
+            integration_x1000.py \
+            validation_moteurs.py \
+            moteurs \
+            tests/test_audit_final_x1000.py
+
+      - name: Executer audit final M1-M5
+        run: |
+          python -m unittest discover \
+            -s tests \
+            -p "test_audit_final_x1000.py" \
+            -v
+
+      - name: Tester integration complete
+        run: |
+          python integration_x1000.py
+
+      - name: Confirmer la fin des tests
+        run: |
+          echo "Audit final X1000 termine"
+          echo "Tests M1-M5 executes"
+          echo "Aucune collecte PMU demandee"
+          echo "Aucun FIGE automatique demande"
+          echo "Aucune publication automatique demandee"
