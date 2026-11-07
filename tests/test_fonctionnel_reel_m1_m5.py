@@ -233,7 +233,7 @@ def tester_moteurs(course=None, actifs=None):
 
         print(nom, "-", statut, numeros)
 
-    return resultats
+    assert isinstance(resultats, dict)
 
 
 def main():
