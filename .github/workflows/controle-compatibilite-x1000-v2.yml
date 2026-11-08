@@ -1,0 +1,225 @@
+name: X1000 V2 - Controle compatibilite securise
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  controle:
+    name: Audit dependances et automatisations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Recuperer toutes les branches
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Audit X1000 sans modification
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -B - <<'PY'
+          import ast
+          import subprocess
+          from pathlib import Path
+
+          def git(*args):
+              return subprocess.run(
+                  ["git", *args],
+                  capture_output=True,
+                  text=True,
+                  check=True
+              ).stdout
+
+          def report(title):
+              print(f"\n=== {title} ===")
+
+          root = Path(".")
+          errors = []
+          warnings = []
+
+          report("MOTEURS M1 A M5")
+
+          for name in [
+              "m1.py", "m2.py", "m3.py",
+              "m4.py", "m5.py",
+              "noyau_commun.py"
+          ]:
+              path = root / name
+
+              if not path.is_file():
+                  errors.append(f"Absent: {name}")
+                  continue
+
+              try:
+                  ast.parse(
+                      path.read_text(
+                          encoding="utf-8-sig"
+                      )
+                  )
+                  print("SYNTAXE OK:", name)
+              except (SyntaxError, OSError,
+                      UnicodeError) as exc:
+                  errors.append(f"{name}: {exc}")
+
+          report("COORDINATION HISTORIQUE")
+
+          branches = git(
+              "branch", "-r", "--format=%(refname)"
+          ).splitlines()
+
+          modules = [
+              "coordination_x1000.py",
+              "integration_x1000.py",
+              "validation_moteurs.py"
+          ]
+
+          for module in modules:
+              if Path(module).is_file():
+                  print("PRESENT SUR MAIN:", module)
+                  continue
+
+              found = []
+
+              for branch in branches:
+                  if not branch.startswith(
+                      "refs/remotes/origin/"
+                  ):
+                      continue
+
+                  result = subprocess.run(
+                      [
+                          "git", "cat-file", "-e",
+                          f"{branch}:{module}"
+                      ],
+                      capture_output=True
+                  )
+
+                  if result.returncode == 0:
+                      found.append(
+                          branch.split("origin/", 1)[-1]
+                      )
+
+              if found:
+                  print(
+                      "A RESTAURER SOUS CONTROLE:",
+                      module, found
+                  )
+              else:
+                  warnings.append(
+                      f"Source introuvable: {module}"
+                  )
+
+          report("DEPENDANCES")
+
+          for name in modules:
+              if not Path(name).exists():
+                  continue
+
+              source = Path(name).read_text(
+                  encoding="utf-8-sig"
+              )
+
+              tree = ast.parse(source)
+              imports = []
+
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      imports.extend(
+                          a.name for a in node.names
+                      )
+                  elif isinstance(
+                      node, ast.ImportFrom
+                  ):
+                      if node.module:
+                          imports.append(node.module)
+
+              print(name, "imports:", imports)
+
+          report("WORKFLOWS DE MAIN")
+
+          workflow_dir = Path(
+              ".github/workflows"
+          )
+
+          for path in sorted(
+              workflow_dir.glob("*.yml")
+          ):
+              content = path.read_text(
+                  encoding="utf-8-sig"
+              )
+
+              print("WORKFLOW:", path.name)
+
+              if "schedule:" in content:
+                  print("  CADENCE A VERIFIER")
+
+              if "workflow_dispatch:" in content:
+                  print("  DECLENCHEMENT MANUEL")
+
+              if "push:" in content:
+                  print("  DECLENCHEMENT PUSH")
+
+              if "pull_request:" in content:
+                  print("  DECLENCHEMENT PR")
+
+          report("HERITAGE PHOENIX")
+
+          for path in root.rglob("*"):
+              if not path.is_file():
+                  continue
+              if ".git" in path.parts:
+                  continue
+              if path.suffix not in {
+                  ".py", ".sh", ".yml", ".yaml"
+              }:
+                  continue
+
+              content = path.read_text(
+                  encoding="utf-8-sig",
+                  errors="replace"
+              )
+
+              if "PHOENIX" in content.upper():
+                  print("REFERENCE:", path)
+
+          report("BILAN")
+
+          print("Erreurs:", len(errors))
+          print("Avertissements:", len(warnings))
+
+          for item in errors:
+              print("ERREUR:", item)
+
+          for item in warnings:
+              print("ATTENTION:", item)
+
+          print("Aucun FIGE modifie")
+          print("Aucune archive modifiee")
+          print("Aucun moteur execute")
+          print("Aucune publication")
+
+          if errors:
+              raise SystemExit(1)
+          PY
+
+      - name: Verifier depot inchange
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code HEAD --
+          git diff --cached --exit-code HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "Depot inchange"
