@@ -121,6 +121,7 @@ jobs:
           fichiers += sorted(
               Path("moteurs").glob("*.py")
           )
+
           fichiers += sorted(
               Path("tests").glob("test_*.py")
           )
@@ -227,10 +228,12 @@ jobs:
                   status["figes_automatiques"]
                   is False
               )
+
               assert (
                   status["publication_automatique"]
                   is False
               )
+
               assert (
                   status["collecte_automatique"]
                   is False
@@ -256,6 +259,117 @@ jobs:
           print("Six routes API : OK")
           print("Lecture seule : OK")
           PY
+
+      # ==========================================
+      # CONTROLE DES PAGES OFFICIELLES
+      # ==========================================
+
+      - name: Recuperer pages officielles X1000
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: x1000-pages-reference
+          persist-credentials: false
+          sparse-checkout: |
+            index.html
+            pmu.html
+          sparse-checkout-cone-mode: false
+
+      - name: Verifier pages et liens GitHub Pages
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          from pathlib import Path
+          from html.parser import HTMLParser
+          from urllib.parse import urlsplit, unquote
+
+          racine = Path(
+              "x1000-pages-reference"
+          ).resolve()
+
+          pages = (
+              "index.html",
+              "pmu.html",
+          )
+
+          class AnalyseLiens(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.liens = []
+
+              def handle_starttag(self, tag, attrs):
+                  attributs = dict(attrs)
+
+                  if tag == "a":
+                      lien = attributs.get("href")
+
+                      if lien is not None:
+                          self.liens.append(lien)
+
+          for nom in pages:
+              fichier = racine / nom
+
+              if (
+                  not fichier.is_file()
+                  or fichier.is_symlink()
+              ):
+                  raise SystemExit(
+                      f"Page officielle absente : {nom}"
+                  )
+
+              contenu = fichier.read_text(
+                  encoding="utf-8-sig"
+              )
+
+              if not contenu.strip():
+                  raise SystemExit(
+                      f"Page officielle vide : {nom}"
+                  )
+
+              analyse = AnalyseLiens()
+              analyse.feed(contenu)
+
+              for lien in analyse.liens:
+                  url = urlsplit(lien.strip())
+
+                  if url.scheme or url.netloc:
+                      continue
+
+                  if (
+                      not url.path
+                      or url.path.startswith("/")
+                  ):
+                      continue
+
+                  cible = (
+                      fichier.parent
+                      / unquote(url.path)
+                  ).resolve()
+
+                  if not cible.is_relative_to(racine):
+                      raise SystemExit(
+                          f"Lien hors site : {lien}"
+                      )
+
+                  if (
+                      cible.suffix.lower() == ".html"
+                      and not cible.is_file()
+                  ):
+                      raise SystemExit(
+                          f"Lien HTML invalide : {lien}"
+                      )
+
+              print("PAGE OK:", nom)
+
+          print(
+              "Pages officielles et liens HTML : OK"
+          )
+          PY
+
+      # ==========================================
+      # TESTS EXISTANTS CONSERVES
+      # ==========================================
 
       - name: Executer tests de regression
         run: |
@@ -310,6 +424,7 @@ jobs:
           echo "M1-M5 : controles reussis"
           echo "Coordination : controlee"
           echo "Six routes API : controlees"
+          echo "Pages officielles : controlees"
           echo "Regression : tests reussis"
           echo "Securite : tests reussis"
           echo "FIGES : aucune ecriture demandee"
