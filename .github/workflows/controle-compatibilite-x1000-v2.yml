@@ -53,25 +53,37 @@ jobs:
 
           for name in [
               "m1.py", "m2.py", "m3.py",
-              "m4.py", "m5.py",
-              "noyau_commun.py"
+              "m4.py", "m5.py", "noyau_commun.py"
           ]:
-              path = root / name
+              matches = [
+                  p for p in (
+                      root / name,
+                      root / "moteurs" / name
+                  ) if p.is_file()
+              ]
 
-              if not path.is_file():
+              if not matches:
                   errors.append(f"Absent: {name}")
                   continue
 
-              try:
-                  ast.parse(
-                      path.read_text(
-                          encoding="utf-8-sig"
-                      )
+              if len(matches) > 1:
+                  warnings.append(
+                      f"Plusieurs copies: {name}"
                   )
-                  print("SYNTAXE OK:", name)
-              except (SyntaxError, OSError,
-                      UnicodeError) as exc:
-                  errors.append(f"{name}: {exc}")
+
+              for path in matches:
+                  try:
+                      ast.parse(
+                          path.read_text(
+                              encoding="utf-8-sig"
+                          ),
+                          filename=str(path)
+                      )
+                      print("SYNTAXE OK:", path)
+                  except (
+                      SyntaxError, OSError, UnicodeError
+                  ) as exc:
+                      errors.append(f"{path}: {exc}")
 
           report("COORDINATION HISTORIQUE")
 
@@ -113,7 +125,7 @@ jobs:
 
               if found:
                   print(
-                      "A RESTAURER SOUS CONTROLE:",
+                      "SOURCE HISTORIQUE DISPONIBLE:",
                       module, found
                   )
               else:
@@ -124,14 +136,22 @@ jobs:
           report("DEPENDANCES")
 
           for name in modules:
-              if not Path(name).exists():
+              path = Path(name)
+              if not path.is_file():
                   continue
 
-              source = Path(name).read_text(
-                  encoding="utf-8-sig"
-              )
+              try:
+                  tree = ast.parse(
+                      path.read_text(
+                          encoding="utf-8-sig"
+                      )
+                  )
+              except (
+                  SyntaxError, OSError, UnicodeError
+              ) as exc:
+                  errors.append(f"{name}: {exc}")
+                  continue
 
-              tree = ast.parse(source)
               imports = []
 
               for node in ast.walk(tree):
@@ -164,17 +184,19 @@ jobs:
 
               if "schedule:" in content:
                   print("  CADENCE A VERIFIER")
-
               if "workflow_dispatch:" in content:
                   print("  DECLENCHEMENT MANUEL")
-
               if "push:" in content:
                   print("  DECLENCHEMENT PUSH")
-
               if "pull_request:" in content:
                   print("  DECLENCHEMENT PR")
 
-          report("HERITAGE PHOENIX")
+          report("REFERENCES HISTORIQUES")
+
+          ancien_nom = "".join(
+              chr(code) for code in
+              (80, 72, 79, 69, 78, 73, 88)
+          )
 
           for path in root.rglob("*"):
               if not path.is_file():
@@ -186,12 +208,18 @@ jobs:
               }:
                   continue
 
-              content = path.read_text(
-                  encoding="utf-8-sig",
-                  errors="replace"
-              )
+              try:
+                  content = path.read_text(
+                      encoding="utf-8-sig",
+                      errors="replace"
+                  )
+              except OSError as exc:
+                  warnings.append(
+                      f"Lecture impossible: {path}: {exc}"
+                  )
+                  continue
 
-              if "PHOENIX" in content.upper():
+              if ancien_nom in content.upper():
                   print("REFERENCE:", path)
 
           report("BILAN")
