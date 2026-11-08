@@ -63,18 +63,18 @@ jobs:
               def __init__(self):
                   super().__init__()
                   self.tags = set()
+                  self.links = []
 
               def handle_starttag(self, tag, attrs):
                   self.tags.add(tag)
+                  if tag == "a":
+                      href = dict(attrs).get("href")
+                      if href:
+                          self.links.append(href)
 
           dashboard = Path(
               ".github/workflows/dashboard_x1000.html"
           )
-
-          if not dashboard.is_file():
-              raise SystemExit(
-                  "ERREUR: tableau de bord principal absent"
-              )
 
           pages = [
               dashboard,
@@ -84,11 +84,9 @@ jobs:
 
           for fichier in pages:
               if not fichier.is_file():
-                  print(
-                      "::warning title=Page absente::"
-                      + str(fichier)
+                  raise SystemExit(
+                      f"ERREUR: page obligatoire absente: {fichier}"
                   )
-                  continue
 
               contenu = fichier.read_text(
                   encoding="utf-8-sig"
@@ -113,7 +111,21 @@ jobs:
 
               print(f"OK: {fichier}")
 
-          print("Controle HTML termine")
+          index = Path("index.html").read_text(
+              encoding="utf-8-sig"
+          )
+
+          if "X1000 Intelligence Hippique V2" not in index:
+              raise SystemExit(
+                  "ERREUR: nom officiel X1000 V2 absent"
+              )
+
+          if "X1000 PHOENIX" in index.upper():
+              raise SystemExit(
+                  "ERREUR: reference PHOENIX incorrecte"
+              )
+
+          print("Controle HTML termine : OK")
           PY
 
       - name: Verifier API et moteurs
@@ -160,6 +172,10 @@ jobs:
                   "publication_automatique"
               ] is False
 
+              assert status[
+                  "validation_officielle_automatique"
+              ] is False
+
               for route in routes:
                   for method in (
                       "POST", "PUT", "PATCH", "DELETE"
@@ -198,12 +214,13 @@ jobs:
         shell: bash
         run: |
           {
-            echo "## X1000 V2 - Diagnostic"
+            echo "## X1000 Intelligence Hippique V2"
             echo ""
             echo "Statut : ${{ job.status }}"
             echo ""
-            echo "- Controle HTML des pages presentes"
-            echo "- Signalement des pages absentes"
+            echo "- Verification index.html"
+            echo "- Verification pmu.html"
+            echo "- Verification tableau de bord existant"
             echo "- Verification des six routes API"
             echo "- Verification des references M1 a M5"
             echo "- Controle des methodes interdites"
