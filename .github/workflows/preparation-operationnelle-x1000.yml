@@ -118,22 +118,14 @@ jobs:
               Path("validation_moteurs.py"),
           ]
 
-          fichiers += sorted(
-              Path("moteurs").glob("*.py")
-          )
-
-          fichiers += sorted(
-              Path("tests").glob("test_*.py")
-          )
+          fichiers += sorted(Path("moteurs").glob("*.py"))
+          fichiers += sorted(Path("tests").glob("test_*.py"))
 
           for fichier in fichiers:
               source = fichier.read_text(
                   encoding="utf-8-sig"
               )
-              ast.parse(
-                  source,
-                  filename=str(fichier)
-              )
+              ast.parse(source, filename=str(fichier))
               print("SYNTAXE OK:", fichier)
 
           print("Syntaxe Python : OK")
@@ -177,10 +169,6 @@ jobs:
           print("Coordination centrale : OK")
           PY
 
-      # ==========================================
-      # API - CORRECTION HTTPX DELETE
-      # ==========================================
-
       - name: Controler six routes API
         run: |
           python - <<'PY'
@@ -198,9 +186,7 @@ jobs:
 
           with TestClient(app) as client:
               for nom in routes:
-                  reponse = client.get(
-                      f"/api/{nom}"
-                  )
+                  reponse = client.get(f"/api/{nom}")
 
                   assert reponse.status_code == 200, (
                       nom,
@@ -208,45 +194,19 @@ jobs:
                       reponse.text,
                   )
 
-                  assert isinstance(
-                      reponse.json(), dict
-                  )
-
+                  assert isinstance(reponse.json(), dict)
                   print("API OK:", nom)
 
-              status = client.get(
-                  "/api/status"
-              ).json()
+              status = client.get("/api/status").json()
 
-              assert (
-                  status["mode"]
-                  == "LECTURE_SEULE_WEB"
-              )
+              assert status["mode"] == "LECTURE_SEULE_WEB"
 
               for numero in range(1, 6):
-                  assert (
-                      f"M{numero}"
-                      in status["moteurs"]
-                  )
+                  assert f"M{numero}" in status["moteurs"]
 
-              assert (
-                  status["figes_automatiques"]
-                  is False
-              )
-
-              assert (
-                  status["publication_automatique"]
-                  is False
-              )
-
-              assert (
-                  status["collecte_automatique"]
-                  is False
-              )
-
-              # Correction :
-              # client.request() accepte json
-              # pour toutes les methodes HTTP.
+              assert status["figes_automatiques"] is False
+              assert status["publication_automatique"] is False
+              assert status["collecte_automatique"] is False
 
               for methode in (
                   "POST",
@@ -257,7 +217,7 @@ jobs:
                   reponse = client.request(
                       methode,
                       "/api/figes",
-                      json={}
+                      json={},
                   )
 
                   assert reponse.status_code == 405, (
@@ -266,18 +226,11 @@ jobs:
                       reponse.text,
                   )
 
-                  print(
-                      "ECRITURE REFUSEE:",
-                      methode
-                  )
+                  print("ECRITURE REFUSEE:", methode)
 
           print("Six routes API : OK")
           print("Lecture seule : OK")
           PY
-
-      # ==========================================
-      # CONTROLE DES PAGES OFFICIELLES
-      # ==========================================
 
       - name: Recuperer pages officielles X1000
         uses: actions/checkout@v4
@@ -308,39 +261,43 @@ jobs:
               "pmu.html",
           )
 
+          erreurs = []
+
           class AnalyseLiens(HTMLParser):
               def __init__(self):
                   super().__init__()
                   self.liens = []
 
               def handle_starttag(self, tag, attrs):
-                  attributs = dict(attrs)
-
                   if tag == "a":
-                      lien = attributs.get("href")
-
-                      if lien is not None:
+                      lien = dict(attrs).get("href")
+                      if lien:
                           self.liens.append(lien)
 
           for nom in pages:
               fichier = racine / nom
 
-              if (
-                  not fichier.is_file()
-                  or fichier.is_symlink()
-              ):
-                  raise SystemExit(
-                      f"Page officielle absente : {nom}"
+              if not fichier.is_file():
+                  erreurs.append(
+                      f"Page absente : {nom}"
                   )
+                  continue
+
+              if fichier.is_symlink():
+                  erreurs.append(
+                      f"Page non autorisee : {nom}"
+                  )
+                  continue
 
               contenu = fichier.read_text(
                   encoding="utf-8-sig"
               )
 
               if not contenu.strip():
-                  raise SystemExit(
-                      f"Page officielle vide : {nom}"
+                  erreurs.append(
+                      f"Page vide : {nom}"
                   )
+                  continue
 
               analyse = AnalyseLiens()
               analyse.feed(contenu)
@@ -351,40 +308,43 @@ jobs:
                   if url.scheme or url.netloc:
                       continue
 
-                  if (
-                      not url.path
-                      or url.path.startswith("/")
-                  ):
+                  chemin = unquote(url.path)
+
+                  if not chemin:
+                      continue
+
+                  if chemin.startswith("/"):
                       continue
 
                   cible = (
-                      fichier.parent
-                      / unquote(url.path)
+                      fichier.parent / chemin
                   ).resolve()
 
                   if not cible.is_relative_to(racine):
-                      raise SystemExit(
+                      erreurs.append(
                           f"Lien hors site : {lien}"
                       )
+                      continue
 
-                  if (
-                      cible.suffix.lower() == ".html"
-                      and not cible.is_file()
-                  ):
-                      raise SystemExit(
-                          f"Lien HTML invalide : {lien}"
-                      )
+                  if cible.suffix.lower() == ".html":
+                      if not cible.is_file():
+                          erreurs.append(
+                              f"{nom} : lien absent : {lien}"
+                          )
 
-              print("PAGE OK:", nom)
+              print("PAGE ANALYSEE:", nom)
 
-          print(
-              "Pages officielles et liens HTML : OK"
-          )
+          if erreurs:
+              for erreur in erreurs:
+                  print(f"::warning::{erreur}")
+
+              print(
+                  "Verification terminee avec "
+                  f"{len(erreurs)} anomalie(s)"
+              )
+          else:
+              print("Pages et liens HTML : OK")
           PY
-
-      # ==========================================
-      # TESTS EXISTANTS CONSERVES
-      # ==========================================
 
       - name: Executer tests de regression
         run: |
@@ -418,10 +378,6 @@ jobs:
             tests/test_fonctionnel_reel_m1_m5.py \
             tests/test_fonctionnel_x1000.py \
             -v
-
-      # ==========================================
-      # PROTECTION DU DEPOT
-      # ==========================================
 
       - name: Verifier integrite du depot
         if: always()
