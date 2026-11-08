@@ -1,46 +1,64 @@
-
-
 #!/usr/bin/env bash
 set -euo pipefail
 
+DEPOT="https://github.com/yadcaf-cloud/x1000-intelligence-hippique-v2.git"
 BRANCHE="fix/x1000-v2-reparation-controlee"
 WORKFLOW=".github/workflows/preparation-operationnelle-x1000.yml"
 SOURCE=".github/workflows/dashboard_x1000.html"
 
-echo "=== X1000 - REPARATION PAGES PUBLIQUES ==="
+echo "=== X1000 - REPARATION CONTROLEE ==="
 
-git rev-parse --show-toplevel >/dev/null
+# Verifier le depot local.
+git rev-parse --is-inside-work-tree >/dev/null
 cd "$(git rev-parse --show-toplevel)"
 
+ORIGIN="$(git remote get-url origin)"
+
+case "$ORIGIN" in
+  "$DEPOT"|\
+  "https://github.com/yadcaf-cloud/x1000-intelligence-hippique-v2"|\
+  "git@github.com:yadcaf-cloud/x1000-intelligence-hippique-v2.git")
+    echo "Depot GitHub : OK"
+    ;;
+  *)
+    echo "ERREUR : depot distant inattendu"
+    echo "$ORIGIN"
+    exit 1
+    ;;
+esac
+
+# Verifier la branche.
 if [[ "$(git branch --show-current)" != "$BRANCHE" ]]; then
   echo "ERREUR : branche incorrecte"
   exit 1
 fi
 
+# Ne pas toucher aux modifications existantes.
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "ERREUR : modifications locales presentes"
   exit 1
 fi
 
+# Verifier les sources.
 for fichier in "$WORKFLOW" "$SOURCE"; do
   if [[ ! -s "$fichier" ]]; then
-    echo "ERREUR : fichier source absent : $fichier"
+    echo "ERREUR : source absente : $fichier"
     exit 1
   fi
 done
 
+# Ne jamais ecraser les pages existantes.
 for fichier in index.html pmu.html dashboard_x1000.html; do
   if [[ -e "$fichier" ]]; then
-    echo "ERREUR : fichier deja existant : $fichier"
+    echo "ERREUR : page deja existante : $fichier"
     exit 1
   fi
 done
 
-# Publier une copie du tableau de bord existant.
-# Le fichier source original reste intact.
+# Publier le tableau de bord original sans le modifier.
 cp "$SOURCE" dashboard_x1000.html
 
-# Page d'accueil publique.
+# Creer l'accueil public.
 cat > index.html <<'HTML'
 <!DOCTYPE html>
 <html lang="fr">
@@ -71,12 +89,7 @@ section {
   padding: 22px;
   margin: 20px 0;
 }
-a {
-  display: inline-block;
-  color: #a7dfff;
-  padding: 10px 0;
-}
-small { color: #b7cbd0; }
+a { color: #a7dfff; }
 </style>
 </head>
 <body>
@@ -88,9 +101,8 @@ small { color: #b7cbd0; }
 <section>
 <h2>Tableau de bord X1000</h2>
 <p>
-Consulter les informations techniques,
-les moteurs indépendants et les données
-disponibles via l'API en lecture seule.
+Consultation des moteurs indépendants
+et des informations API disponibles.
 </p>
 <a href="dashboard_x1000.html">
 Ouvrir le tableau de bord
@@ -98,32 +110,26 @@ Ouvrir le tableau de bord
 </section>
 <section>
 <h2>Courses PMU France</h2>
-<p>
-Accès à l'espace de consultation
-des courses et des analyses hippiques.
-</p>
-<a href="pmu.html">
-Ouvrir l'espace PMU
-</a>
+<p>Consultation des courses et analyses.</p>
+<a href="pmu.html">Ouvrir l'espace PMU</a>
 </section>
 <section>
 <h2>Protection des données</h2>
 <p>
 Aucun FIGÉ automatique.
 Aucune modification des archives.
-Aucune publication de pronostic
-par cette interface.
+Aucune publication automatique.
 </p>
 </section>
 </main>
 <footer>
-<small>X1000 — Consultation en lecture seule</small>
+<p>X1000 — Consultation en lecture seule</p>
 </footer>
 </body>
 </html>
 HTML
 
-# Page PMU publique.
+# Creer la page PMU.
 cat > pmu.html <<'HTML'
 <!DOCTYPE html>
 <html lang="fr">
@@ -154,36 +160,31 @@ section {
   padding: 22px;
   margin: 20px 0;
 }
-a {
-  color: #a7dfff;
-  display: inline-block;
-  padding: 10px 0;
-}
+a { color: #a7dfff; }
 </style>
 </head>
 <body>
 <header>
 <h1>🏇 X1000 — Courses PMU France</h1>
-<p>Analyses hippiques indépendantes M1 à M5</p>
+<p>Analyses indépendantes M1 à M5</p>
 </header>
 <main>
 <section>
 <h2>Consultation des courses</h2>
 <p>
-Les courses et les sélections sont
-consultables dans le tableau de bord
-lorsqu'une API compatible est configurée.
+Les données sont disponibles dans le
+tableau de bord lorsqu'une API compatible
+est configurée.
 </p>
 <a href="dashboard_x1000.html">
-Consulter les données disponibles
+Consulter le tableau de bord
 </a>
 </section>
 <section>
 <h2>Intégrité des analyses</h2>
 <p>
-Les FIGÉS et les archives restent
-protégés. Cette page ne crée aucun
-pronostic et ne modifie aucune donnée.
+Les FIGÉS et les archives restent protégés.
+Cette page ne modifie aucune donnée.
 </p>
 </section>
 </main>
@@ -194,51 +195,102 @@ pronostic et ne modifie aucune donnée.
 </html>
 HTML
 
-# Verifications locales.
+# Verifier les trois pages.
 python - <<'PY'
 from pathlib import Path
 from html.parser import HTMLParser
+from urllib.parse import urlsplit, unquote
 
-class Verificateur(HTMLParser):
+root = Path(".").resolve()
+
+class Analyse(HTMLParser):
     def __init__(self):
         super().__init__()
         self.tags = set()
+        self.refs = []
 
     def handle_starttag(self, tag, attrs):
         self.tags.add(tag)
+        for key, value in attrs:
+            if key in ("href", "src") and value:
+                self.refs.append(value)
 
 for nom in (
     "index.html",
     "pmu.html",
     "dashboard_x1000.html",
 ):
-    fichier = Path(nom)
+    fichier = root / nom
     contenu = fichier.read_text(encoding="utf-8-sig")
-    analyse = Verificateur()
-    analyse.feed(contenu)
-    analyse.close()
+    parser = Analyse()
+    parser.feed(contenu)
+    parser.close()
 
-    assert {"html", "head", "body"} <= analyse.tags
+    assert {"html", "head", "body"} <= parser.tags
     assert contenu.strip().lower().endswith("</html>")
-    print("OK:", nom)
 
-assert Path(
-    ".github/workflows/"
-    "preparation-operationnelle-x1000.yml"
-).is_file()
+    for ref in parser.refs:
+        url = urlsplit(ref)
+        if url.scheme or url.netloc or not url.path:
+            continue
 
-print("Pages publiques : OK")
-print("Workflow original : preserve")
+        chemin = unquote(url.path)
+        cible = (
+            root / chemin.lstrip("/")
+            if chemin.startswith("/")
+            else fichier.parent / chemin
+        ).resolve()
+
+        assert cible.is_relative_to(root), ref
+
+        if cible.is_dir():
+            cible = cible / "index.html"
+
+        assert cible.is_file(), (
+            f"Lien absent dans {nom}: {ref}"
+        )
+
+    print("PAGE OK:", nom)
+
+print("Pages et liens locaux : OK")
 PY
 
-# Commit limite aux trois pages.
+# Verifier que les six controles API restent presents.
+python - <<'PY'
+from pathlib import Path
+
+workflow = Path(
+    ".github/workflows/"
+    "preparation-operationnelle-x1000.yml"
+).read_text(encoding="utf-8")
+
+assert "Controler six routes API" in workflow
+assert '"status"' in workflow
+assert '"courses"' in workflow
+assert '"selections"' in workflow
+assert '"figes"' in workflow
+assert '"audits"' in workflow
+assert '"diagnostic"' in workflow
+assert "Tester moteurs M1-M5" in workflow
+assert "Executer tests de regression" in workflow
+
+print("Workflow conserve : OK")
+print("Six controles API presents : OK")
+PY
+
+# Verifier que seul le contenu public sera ajoute.
 git add -- index.html pmu.html dashboard_x1000.html
 git diff --cached --check
 
 git commit -m \
-  "fix: restaurer pages publiques X1000 sans modifier les moteurs"
+  "fix: restaurer les pages publiques X1000"
 
 git push origin "$BRANCHE"
 
-echo "=== REPARATION ENVOYEE ==="
-echo "Relancer et verifier GitHub Actions."
+echo "=================================="
+echo "X1000 - REPARATION ENVOYEE"
+echo "Pages publiques ajoutees"
+echo "Workflow original conserve"
+echo "M1-M5 non modifies"
+echo "FIGES et archives non modifies"
+echo "=================================="
