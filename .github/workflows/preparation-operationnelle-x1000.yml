@@ -41,7 +41,7 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
-      X1000_DATA_DIR: ${{ runner.temp }}/x1000-data
+      X1000_DATA_DIR: ${{ github.workspace }}/.x1000-test-data
 
     defaults:
       run:
