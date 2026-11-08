@@ -9,6 +9,7 @@ on:
       - "api.py"
       - "index.html"
       - "pmu.html"
+      - ".github/workflows/dashboard_x1000.html"
       - ".github/workflows/verification-tableau-bord-x1000-v2.yml"
 
 permissions:
@@ -56,27 +57,50 @@ jobs:
         run: |
           python -B - <<'PY'
           from pathlib import Path
+          from html.parser import HTMLParser
 
-          pages = ("index.html", "pmu.html")
-          presentes = []
+          class ControleHTML(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.html = False
+                  self.head = False
+                  self.body = False
 
-          for nom in pages:
-              fichier = Path(nom)
-              if fichier.is_file():
-                  contenu = fichier.read_text(
-                      encoding="utf-8-sig"
-                  )
-                  assert "<html" in contenu.lower(), nom
-                  presentes.append(nom)
-                  print(f"{nom}: structure HTML presente")
-              else:
-                  print(f"{nom}: absent sur cette branche")
+              def handle_starttag(self, tag, attrs):
+                  if tag == "html":
+                      self.html = True
+                  elif tag == "head":
+                      self.head = True
+                  elif tag == "body":
+                      self.body = True
+
+          pages = (
+              Path(".github/workflows/dashboard_x1000.html"),
+              Path("index.html"),
+              Path("pmu.html"),
+          )
+
+          presentes = [p for p in pages if p.is_file()]
 
           if not presentes:
-              print(
-                  "::warning::Aucune page HTML trouvee. "
-                  "Tableau de bord non valide."
+              raise SystemExit(
+                  "ERREUR: aucun tableau de bord HTML trouve"
               )
+
+          for fichier in presentes:
+              contenu = fichier.read_text(
+                  encoding="utf-8-sig"
+              )
+              controle = ControleHTML()
+              controle.feed(contenu)
+
+              assert controle.html, f"{fichier}: html absent"
+              assert controle.head, f"{fichier}: head absent"
+              assert controle.body, f"{fichier}: body absent"
+
+              print(f"{fichier}: structure HTML OK")
+
+          print("Diagnostic HTML : OK")
           PY
 
       - name: Verifier API et moteurs
@@ -98,7 +122,9 @@ jobs:
           with TestClient(app) as client:
               for route in routes:
                   response = client.get(route)
-                  assert response.status_code == 200, route
+                  assert response.status_code == 200, (
+                      route, response.status_code
+                  )
                   print(route, "OK")
 
               status = client.get("/api/status").json()
@@ -119,10 +145,12 @@ jobs:
                       response = client.request(
                           method, route
                       )
-                      assert response.status_code == 405
+                      assert response.status_code == 405, (
+                          route, method, response.status_code
+                      )
 
-          print("API securisee : OK")
-          print("Cinq moteurs references : OK")
+          print("API lecture seule : OK")
+          print("Moteurs M1 a M5 references : OK")
           PY
 
       - name: Verifier aucune modification
@@ -130,6 +158,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           git diff --exit-code HEAD --
           git diff --cached --exit-code HEAD --
 
@@ -149,7 +178,7 @@ jobs:
             echo ""
             echo "Resultat du job : ${{ job.status }}"
             echo ""
-            echo "- Diagnostic HTML"
+            echo "- Verification HTML du tableau existant"
             echo "- Verification des six routes API"
             echo "- Verification des cinq moteurs"
             echo "- Controle lecture seule"
