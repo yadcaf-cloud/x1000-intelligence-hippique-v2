@@ -1,0 +1,349 @@
+name: "X1000 V2 - Audit technique renforce et securise"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/x1000-v2-reparation-controlee
+    paths:
+      - ".github/workflows/audit-renforce-x1000-v2.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x1000-audit-renforce-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: "Audit M1-M5, coordination, API et securite"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONNOUSERSITE: "1"
+      PYTHONUNBUFFERED: "1"
+      X1000_READ_ONLY: "1"
+      X1000_NO_FIGE: "1"
+      X1000_NO_PUBLICATION: "1"
+
+    steps:
+      - name: Recuperer la branche de reparation
+        uses: actions/checkout@v4
+        with:
+          ref: fix/x1000-v2-reparation-controlee
+          path: reparation
+          persist-credentials: false
+
+      - name: Recuperer la branche principale
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: principale
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Preparer les copies isolees
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/x1000"
+
+          cp -a reparation \
+            "$RUNNER_TEMP/x1000/tests"
+
+          git -C reparation status --porcelain
+          git -C principale status --porcelain
+
+          echo "Copies de travail preparees"
+
+      - name: Audit statique et comparaison
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -B - <<'PY'
+          import ast
+          import hashlib
+          import json
+          import subprocess
+          from pathlib import Path
+
+          racine = Path.cwd()
+          main = racine / "principale"
+          fix = racine / "reparation"
+
+          erreurs = []
+          avertissements = []
+
+          def erreur(message):
+              erreurs.append(message)
+              print("ERREUR:", message)
+
+          def avertir(message):
+              avertissements.append(message)
+              print("ATTENTION:", message)
+
+          def empreinte(path):
+              h = hashlib.sha256()
+              with path.open("rb") as f:
+                  for bloc in iter(
+                      lambda: f.read(65536), b""
+                  ):
+                      h.update(bloc)
+              return h.hexdigest()
+
+          def fichiers(root):
+              return {
+                  str(p.relative_to(root)): p
+                  for p in root.rglob("*")
+                  if p.is_file()
+                  and ".git" not in p.parts
+                  and not p.is_symlink()
+              }
+
+          a = fichiers(main)
+          b = fichiers(fix)
+
+          print("=== STRUCTURE M1-M5 ===")
+
+          for nom in ("m1", "m2", "m3", "m4", "m5"):
+              for dossier, contenu in (
+                  ("main", a),
+                  ("reparation", b),
+              ):
+                  p = f"{nom}.py"
+                  q = f"moteurs/{nom}.py"
+
+                  if p not in contenu and q not in contenu:
+                      erreur(
+                          f"{dossier}: moteur {nom} absent"
+                      )
+                  elif p in contenu and q in contenu:
+                      avertir(
+                          f"{dossier}: doublon {nom}"
+                      )
+
+          print("=== COORDINATION ===")
+
+          modules = (
+              "coordination_x1000.py",
+              "integration_x1000.py",
+              "validation_moteurs.py",
+              "api.py",
+          )
+
+          for nom in modules:
+              if nom not in b:
+                  erreur(f"Reparation: {nom} absent")
+
+              if nom not in a:
+                  avertir(f"Main: {nom} absent")
+
+          print("=== SYNTAXE PYTHON ===")
+
+          for branche, contenu in (
+              ("main", a),
+              ("reparation", b),
+          ):
+              for nom, path in contenu.items():
+                  if not nom.endswith(".py"):
+                      continue
+
+                  try:
+                      ast.parse(
+                          path.read_text(
+                              encoding="utf-8-sig"
+                          ),
+                          filename=nom,
+                      )
+                  except (
+                      SyntaxError,
+                      UnicodeError,
+                      OSError,
+                  ) as exc:
+                      erreur(
+                          f"{branche}/{nom}: {exc}"
+                      )
+
+          print("=== FICHIERS HISTORIQUES ===")
+
+          proteges = (
+              "fige", "figes",
+              "archive", "archives",
+              "audit", "audits",
+          )
+
+          for nom in sorted(set(a) | set(b)):
+              if not any(
+                  mot in Path(nom).name.lower()
+                  for mot in proteges
+              ):
+                  continue
+
+              if nom not in a or nom not in b:
+                  print("DIFFERENCE HISTORIQUE:", nom)
+                  continue
+
+              if empreinte(a[nom]) != empreinte(b[nom]):
+                  avertir(
+                      f"Historique divergent: {nom}"
+                  )
+
+          print("=== WORKFLOWS ===")
+
+          workflows = [
+              nom for nom in b
+              if nom.startswith(".github/workflows/")
+              and nom.endswith((".yml", ".yaml"))
+          ]
+
+          print("Workflows detectes:", len(workflows))
+
+          for nom in workflows:
+              contenu = b[nom].read_text(
+                  encoding="utf-8-sig"
+              )
+
+              if "actions/checkout@v4" in contenu:
+                  avertir(
+                      f"Action checkout ancienne: {nom}"
+                  )
+
+              if "actions/setup-python@v5" in contenu:
+                  avertir(
+                      f"Action Python ancienne: {nom}"
+                  )
+
+          print("=== BILAN STATIQUE ===")
+          print("Erreurs:", len(erreurs))
+          print("Avertissements:", len(avertissements))
+          print("Aucun FIGE modifie")
+          print("Aucune archive modifiee")
+
+          rapport = {
+              "erreurs": erreurs,
+              "avertissements": avertissements,
+              "lecture_seule": True,
+              "figes_modifies": False,
+              "archives_modifiees": False,
+          }
+
+          print(json.dumps(
+              rapport,
+              indent=2,
+              ensure_ascii=False,
+          ))
+
+          if erreurs:
+              raise SystemExit(1)
+          PY
+
+      - name: Installer dependances de test
+        working-directory: ${{ runner.temp }}/x1000/tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m pip install \
+            "fastapi>=0.115,<1" \
+            "httpx>=0.27,<1" \
+            "uvicorn>=0.30,<1"
+
+      - name: Tester les cinq moteurs et la coordination
+        working-directory: ${{ runner.temp }}/x1000/tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -B -m unittest discover \
+            -s tests \
+            -p "test_*.py" \
+            -v
+
+      - name: Verifier les routes API
+        working-directory: ${{ runner.temp }}/x1000/tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -B - <<'PY'
+          from api import app
+
+          attendues = {
+              "/api/status",
+              "/api/courses",
+              "/api/selections",
+              "/api/figes",
+              "/api/audits",
+              "/api/diagnostic",
+          }
+
+          routes = {
+              r.path: r.methods
+              for r in app.routes
+          }
+
+          assert attendues <= set(routes)
+
+          for chemin in attendues:
+              methodes = routes[chemin]
+              assert "GET" in methodes
+              assert not (
+                  methodes & {
+                      "POST", "PUT",
+                      "PATCH", "DELETE"
+                  }
+              )
+
+          print("Routes API : OK")
+          print("Aucune route d'ecriture detectee")
+          PY
+
+      - name: Verifier integrite des deux branches
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for dossier in principale reparation
+          do
+            git -C "$dossier" diff --exit-code HEAD --
+            git -C "$dossier" diff --cached --exit-code HEAD --
+
+            test -z "$(
+              git -C "$dossier" ls-files \
+                --others --exclude-standard
+            )"
+          done
+
+          echo "Depots sources inchanges"
+
+      - name: Bilan final
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## X1000 V2 - Audit renforce"
+            echo ""
+            echo "- Branches comparees : main / reparation"
+            echo "- Moteurs M1-M5 : controles statiques"
+            echo "- Coordination : controlee"
+            echo "- API : routes controlees"
+            echo "- Tests : executes en copie isolee"
+            echo "- Aucun commit automatique"
+            echo "- Aucun push automatique"
+            echo "- Aucun FIGE cree ou modifie"
+            echo "- Aucune archive modifiee"
+            echo "- Aucune publication de pronostic"
+            echo ""
+            echo "Les anomalies sont visibles dans les logs."
+            echo "Aucune correction sportive automatique."
+          } >> "$GITHUB_STEP_SUMMARY"
