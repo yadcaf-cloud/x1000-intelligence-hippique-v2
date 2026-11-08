@@ -1,7 +1,8 @@
 name: X1000 - Preparation operationnelle
 
-on:
+"on":
   workflow_dispatch:
+
   push:
     branches:
       - fix/x1000-v2-reparation-controlee
@@ -13,6 +14,7 @@ on:
       - "api.py"
       - "tests/**"
       - ".github/workflows/preparation-operationnelle-x1000.yml"
+
   pull_request:
     paths:
       - "moteurs/**"
@@ -34,12 +36,16 @@ jobs:
   preparation:
     name: Controle operationnel M1-M5
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
       X1000_DATA_DIR: ${{ runner.temp }}/x1000-data
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Recuperer le depot
@@ -54,31 +60,49 @@ jobs:
 
       - name: Installer dependances
         run: |
+          set -euo pipefail
           python -m pip install \
             "fastapi>=0.110,<1" \
             "httpx>=0.27,<1" \
             "pytest>=8,<10"
 
       - name: Preparer environnement isole
-        run: mkdir -p "$X1000_DATA_DIR"
-
-      - name: Verifier fichiers essentiels
-        shell: bash
         run: |
           set -euo pipefail
-          for f in \
-            api.py \
-            coordination_x1000.py \
-            integration_x1000.py \
-            validation_moteurs.py \
-            moteurs/noyau_commun.py \
-            moteurs/m{1..5}.py \
+          mkdir -p "$X1000_DATA_DIR"
+          echo "Environnement de test : OK"
+
+      - name: Verifier fichiers essentiels
+        run: |
+          set -euo pipefail
+
+          fichiers=(
+            api.py
+            coordination_x1000.py
+            integration_x1000.py
+            validation_moteurs.py
+            moteurs/noyau_commun.py
+            moteurs/m1.py
+            moteurs/m2.py
+            moteurs/m3.py
+            moteurs/m4.py
+            moteurs/m5.py
             tests/test_regression_x1000_m1_m5.py
-          do
-            test -s "$f" || {
-              echo "Fichier absent : $f"
+            tests/test_securite_integration_x1000.py
+            tests/test_coordination_centrale_x1000.py
+            tests/test_coordination_renforcee_x1000.py
+            tests/test_preparation_exploitation_x1000.py
+            tests/test_fonctionnel_moteurs_x1000.py
+            tests/test_fonctionnel_reel_m1_m5.py
+            tests/test_fonctionnel_x1000.py
+          )
+
+          for fichier in "${fichiers[@]}"; do
+            if [[ ! -s "$fichier" ]]; then
+              echo "::error::Fichier absent : $fichier"
               exit 1
-            }
+            fi
+            echo "OK : $fichier"
           done
 
       - name: Controler syntaxe Python
@@ -87,23 +111,31 @@ jobs:
           import ast
           from pathlib import Path
 
-          paths = [
-              Path(n) for n in (
-                  'api.py',
-                  'coordination_x1000.py',
-                  'integration_x1000.py',
-                  'validation_moteurs.py'
-              )
+          fichiers = [
+              Path("api.py"),
+              Path("coordination_x1000.py"),
+              Path("integration_x1000.py"),
+              Path("validation_moteurs.py"),
           ]
-          paths += sorted(Path('moteurs').glob('*.py'))
-          paths += sorted(Path('tests').glob('test_*.py'))
 
-          for p in paths:
-              ast.parse(
-                  p.read_text(encoding='utf-8-sig'),
-                  filename=str(p)
+          fichiers += sorted(
+              Path("moteurs").glob("*.py")
+          )
+          fichiers += sorted(
+              Path("tests").glob("test_*.py")
+          )
+
+          for fichier in fichiers:
+              source = fichier.read_text(
+                  encoding="utf-8-sig"
               )
-              print('SYNTAXE OK:', p)
+              ast.parse(
+                  source,
+                  filename=str(fichier)
+              )
+              print("SYNTAXE OK:", fichier)
+
+          print("Syntaxe Python : OK")
           PY
 
       - name: Tester moteurs M1-M5
@@ -111,11 +143,19 @@ jobs:
           python - <<'PY'
           import importlib
 
-          for i in range(1, 6):
-              module = importlib.import_module(f'moteurs.m{i}')
-              assert module.MOTEUR == f'M{i}'
-              assert module.POIDS and module.CHAMP
-              print('MOTEUR OK:', module.MOTEUR)
+          for numero in range(1, 6):
+              nom = f"M{numero}"
+              module = importlib.import_module(
+                  f"moteurs.m{numero}"
+              )
+
+              assert module.MOTEUR == nom
+              assert module.POIDS
+              assert module.CHAMP
+
+              print("MOTEUR OK:", nom)
+
+          print("M1-M5 : controles termines")
           PY
 
       - name: Controler coordination centrale
@@ -123,13 +163,17 @@ jobs:
           python - <<'PY'
           import importlib
 
-          for name in (
-              'validation_moteurs',
-              'coordination_x1000',
-              'integration_x1000'
-          ):
-              importlib.import_module(name)
-              print('MODULE OK:', name)
+          modules = (
+              "validation_moteurs",
+              "coordination_x1000",
+              "integration_x1000",
+          )
+
+          for nom in modules:
+              importlib.import_module(nom)
+              print("MODULE OK:", nom)
+
+          print("Coordination centrale : OK")
           PY
 
       - name: Controler six routes API
@@ -138,80 +182,136 @@ jobs:
           from fastapi.testclient import TestClient
           from api import app
 
+          routes = (
+              "status",
+              "courses",
+              "selections",
+              "figes",
+              "audits",
+              "diagnostic",
+          )
+
           with TestClient(app) as client:
-              for name in (
-                  'status',
-                  'courses',
-                  'selections',
-                  'figes',
-                  'audits',
-                  'diagnostic'
-              ):
-                  response = client.get(f'/api/{name}')
-                  assert response.status_code == 200, (
-                      name, response.status_code
+              for nom in routes:
+                  reponse = client.get(
+                      f"/api/{nom}"
                   )
-                  assert isinstance(response.json(), dict)
-                  print('API OK:', name)
 
-              status = client.get('/api/status').json()
+                  assert reponse.status_code == 200, (
+                      nom,
+                      reponse.status_code,
+                  )
 
-              assert status['mode'] == 'LECTURE_SEULE_WEB'
-              assert all(
-                  f'M{i}' in status['moteurs']
-                  for i in range(1, 6)
+                  assert isinstance(
+                      reponse.json(), dict
+                  )
+
+                  print("API OK:", nom)
+
+              status = client.get(
+                  "/api/status"
+              ).json()
+
+              assert (
+                  status["mode"]
+                  == "LECTURE_SEULE_WEB"
               )
-              assert status['figes_automatiques'] is False
-              assert status['publication_automatique'] is False
 
-              for method in ('post', 'put', 'patch', 'delete'):
-                  response = getattr(client, method)(
-                      '/api/figes',
+              for numero in range(1, 6):
+                  assert (
+                      f"M{numero}"
+                      in status["moteurs"]
+                  )
+
+              assert (
+                  status["figes_automatiques"]
+                  is False
+              )
+              assert (
+                  status["publication_automatique"]
+                  is False
+              )
+              assert (
+                  status["collecte_automatique"]
+                  is False
+              )
+
+              for methode in (
+                  "post",
+                  "put",
+                  "patch",
+                  "delete",
+              ):
+                  reponse = getattr(
+                      client, methode
+                  )(
+                      "/api/figes",
                       json={}
                   )
-                  assert response.status_code == 405
+
+                  assert (
+                      reponse.status_code == 405
+                  ), methode
+
+          print("Six routes API : OK")
+          print("Lecture seule : OK")
           PY
 
       - name: Executer tests de regression
         run: |
           python -m pytest \
-            tests/test_regression_x1000_m1_m5.py -v
+            tests/test_regression_x1000_m1_m5.py \
+            -v
 
       - name: Executer tests de securite
         run: |
           python -m pytest \
-            tests/test_securite_integration_x1000.py -v
+            tests/test_securite_integration_x1000.py \
+            -v
 
       - name: Executer tests de coordination
         run: |
           python -m pytest \
             tests/test_coordination_centrale_x1000.py \
-            tests/test_coordination_renforcee_x1000.py -v
+            tests/test_coordination_renforcee_x1000.py \
+            -v
 
       - name: Executer tests de preparation
         run: |
           python -m pytest \
-            tests/test_preparation_exploitation_x1000.py -v
+            tests/test_preparation_exploitation_x1000.py \
+            -v
 
       - name: Executer tests fonctionnels
         run: |
           python -m pytest \
             tests/test_fonctionnel_moteurs_x1000.py \
             tests/test_fonctionnel_reel_m1_m5.py \
-            tests/test_fonctionnel_x1000.py -v
+            tests/test_fonctionnel_x1000.py \
+            -v
 
-      - name: Verifier integrite des fichiers suivis
+      - name: Verifier integrite du depot
         if: always()
-        shell: bash
         run: |
+          set -euo pipefail
+
+          echo "Controle des fichiers suivis"
+
           git diff --exit-code
           git diff --cached --exit-code
+
+          echo "Fichiers suivis inchanges : OK"
 
       - name: Bilan preparation X1000
         if: success()
         run: |
-          echo "X1000 : controles operationnels termines"
-          echo "M1-M5 : controles executes"
-          echo "Coordination centrale : controle execute"
-          echo "API : controle execute"
-          echo "FIGES et archives : aucune modification demandee"
+          echo "================================"
+          echo "X1000 - PREPARATION TERMINEE"
+          echo "M1-M5 : controles reussis"
+          echo "Coordination : controlee"
+          echo "Six routes API : controlees"
+          echo "Regression : tests reussis"
+          echo "Securite : tests reussis"
+          echo "FIGES : aucune ecriture demandee"
+          echo "Archives : aucune ecriture demandee"
+          echo "================================"
