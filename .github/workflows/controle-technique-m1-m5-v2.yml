@@ -35,7 +35,6 @@ jobs:
       X1000_READ_ONLY: "1"
       X1000_NO_FIGE: "1"
       X1000_NO_PUBLICATION: "1"
-      X1000_DATA_DIR: ${{ runner.temp }}/x1000-data
 
     steps:
       - name: Recuperer la branche
@@ -51,14 +50,24 @@ jobs:
 
       - name: Installer dependances de test
         run: |
+          set -euo pipefail
           python -m pip install \
             "fastapi>=0.115,<1" \
             "httpx>=0.27,<1"
 
       - name: Preparer un environnement isole
+        shell: bash
         run: |
-          mkdir -p "$X1000_DATA_DIR"
-          echo "Environnement de test isole"
+          set -euo pipefail
+
+          DATA_DIR="$RUNNER_TEMP/x1000-data"
+          mkdir -p "$DATA_DIR"
+
+          echo "X1000_DATA_DIR=$DATA_DIR" >> "$GITHUB_ENV"
+
+          echo "Environnement de test isole : OK"
+          echo "Mode lecture seule demande"
+          echo "FIGES et publications desactives"
 
       - name: Verifier la structure et la syntaxe
         run: |
@@ -195,21 +204,25 @@ jobs:
               "/api/diagnostic",
           )
 
-          client = TestClient(app)
-
-          for route in attendues:
-              reponse = client.get(route)
-              assert reponse.status_code == 200, route
-
-              for methode in (
-                  "POST", "PUT", "PATCH", "DELETE"
-              ):
-                  reponse = client.request(
-                      methode, route
+          with TestClient(app) as client:
+              for route in attendues:
+                  reponse = client.get(route)
+                  assert reponse.status_code == 200, (
+                      route,
+                      reponse.status_code,
                   )
-                  assert reponse.status_code == 405, (
-                      route, methode
-                  )
+
+                  for methode in (
+                      "POST", "PUT", "PATCH", "DELETE"
+                  ):
+                      reponse = client.request(
+                          methode, route
+                      )
+                      assert reponse.status_code == 405, (
+                          route,
+                          methode,
+                          reponse.status_code,
+                      )
 
           print("Six routes API : OK")
           print("Methodes de modification bloquees")
@@ -223,30 +236,41 @@ jobs:
           git diff --exit-code HEAD --
           git diff --cached --exit-code HEAD --
 
-          test -z "$(
+          if [ -n "$(
             git ls-files --others --exclude-standard
-          )"
+          )" ]; then
+            echo "ERREUR: fichiers non suivis detectes"
+            git ls-files --others --exclude-standard
+            exit 1
+          fi
 
           echo "Fichiers suivis : inchanges"
           echo "Aucun fichier non suivi cree"
 
       - name: Publier le bilan technique
         if: always()
+        env:
+          RESULTAT: ${{ job.status }}
         run: |
           {
             echo "## X1000 V2 - Controle technique"
             echo ""
+            echo "**Resultat global : $RESULTAT**"
+            echo ""
+            echo "### Controles demandes"
             echo "- M1 : test individuel"
             echo "- M2 : test individuel"
             echo "- M3 : test individuel"
             echo "- M4 : test individuel"
             echo "- M5 : test individuel"
-            echo "- Coordination : controlee"
-            echo "- Regression : executee"
-            echo "- API : controlee"
-            echo "- Aucun FIGE genere"
-            echo "- Aucune archive modifiee"
-            echo "- Aucun pronostic publie"
+            echo "- Coordination : verification"
+            echo "- Regression : verification"
+            echo "- API : verification"
+            echo ""
+            echo "### Protections configurees"
+            echo "- Mode lecture seule demande"
+            echo "- Generation FIGE desactivee"
+            echo "- Publication desactivee"
             echo "- Aucun push automatique"
             echo ""
             echo "Consulter les etapes pour le verdict."
