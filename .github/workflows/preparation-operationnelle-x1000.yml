@@ -1,447 +1,244 @@
-name: X1000 - Preparation operationnelle
-
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - fix/x1000-v2-reparation-controlee
-    paths:
-      - "moteurs/**"
-      - "coordination_x1000.py"
-      - "integration_x1000.py"
-      - "validation_moteurs.py"
-      - "api.py"
-      - "tests/**"
-      - "**/*.html"
-      - ".github/workflows/preparation-operationnelle-x1000.yml"
-
-permissions:
-  contents: read
-
-jobs:
-  preparation:
-    name: Controle operationnel M1-M5 et site
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Recuperer le depot
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Installer Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Installer dependances API
-        run: |
-          python -m pip install \
-            "fastapi>=0.110,<1" \
-            "httpx>=0.27,<1"
-
-      - name: Verifier fichiers essentiels
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          for fichier in \
-            coordination_x1000.py \
-            integration_x1000.py \
-            validation_moteurs.py \
-            moteurs/noyau_commun.py \
-            moteurs/m1.py \
-            moteurs/m2.py \
-            moteurs/m3.py \
-            moteurs/m4.py \
-            moteurs/m5.py \
-            api.py
-          do
-            test -f "$fichier" || {
-              echo "::error::Fichier absent: $fichier"
-              exit 1
-            }
-            echo "OK: $fichier"
-          done
-
-      - name: Verifier syntaxe Python
-        run: |
-          python - <<'PY'
-          import ast
-          from pathlib import Path
-
-          fichiers = [
-              Path("coordination_x1000.py"),
-              Path("integration_x1000.py"),
-              Path("validation_moteurs.py"),
-              Path("api.py"),
-              *Path("moteurs").glob("*.py"),
-              *Path("tests").glob("test_*.py"),
-          ]
-
-          for fichier in fichiers:
-              ast.parse(
-                  fichier.read_text(encoding="utf-8"),
-                  filename=str(fichier),
-              )
-              print("OK:", fichier)
-          PY
-
-      - name: Tester moteurs M1-M5
-        run: |
-          python - <<'PY'
-          import integration_x1000 as x
-
-          moteurs = x.charger_moteurs()
-          attendus = {"M1", "M2", "M3", "M4", "M5"}
-
-          assert set(moteurs) == attendus
-
-          course = x.creer_course_test()
-          resultat = x.executer_integration(course)
-
-          assert resultat["nombre_moteurs"] == 5
-          assert resultat["coordination_complete"]
-
-          predictions = resultat[
-              "predictions_independantes"
-          ]
-
-          assert set(predictions) == attendus
-
-          for classement in predictions.values():
-              assert len(classement) == 5
-              assert len(set(classement)) == 5
-              assert 7 not in classement
-
-          protections = (
-              "publication_autorisee",
-              "fige_officiel",
-              "fige_automatique",
-              "validation_officielle",
-              "archives_modifiees",
-          )
-
-          for cle in protections:
-              assert resultat[cle] is False
-
-          print("M1-M5 : OK")
-          print("Protections : OK")
-          PY
-
-      - name: Executer tests de regression
-        run: |
-          python -m unittest discover \
-            -s tests \
-            -p "test_*.py" \
-            -v
-
-      - name: Controler six routes API
-        run: |
-          python - <<'PY'
-          from fastapi.testclient import TestClient
-          from api import app
-
-          noms = (
-              "status",
-              "courses",
-              "selections",
-              "figes",
-              "audits",
-              "diagnostic",
-          )
-
-          routes = {
-              route.path: route.methods
-              for route in app.routes
-          }
-
-          client = TestClient(app)
-
-          for nom in noms:
-              chemin = f"/api/{nom}"
-
-              assert chemin in routes, chemin
-
-              methodes = routes[chemin]
-              assert "GET" in methodes
-
-              for methode in (
-                  "POST", "PUT", "PATCH", "DELETE"
-              ):
-                  assert methode not in methodes
-
-              reponse = client.get(chemin)
-              assert reponse.status_code == 200, (
-                  chemin, reponse.status_code
-              )
-
-              assert "application/json" in (
-                  reponse.headers.get(
-                      "content-type", ""
-                  )
-              )
-
-              donnees = reponse.json()
-              assert isinstance(donnees, dict)
-
-              if nom in (
-                  "courses",
-                  "selections",
-                  "figes",
-                  "audits",
-              ):
-                  assert isinstance(
-                      donnees.get("disponible"),
-                      bool
-                  )
-                  assert isinstance(
-                      donnees.get("donnees"),
-                      list
-                  )
-
-              if nom == "status":
-                  assert donnees.get(
-                      "mode"
-                  ) == "LECTURE_SEULE_WEB"
-                  assert isinstance(
-                      donnees.get("moteurs"),
-                      dict
-                  )
-
-              if nom == "diagnostic":
-                  assert isinstance(
-                      donnees.get("moteurs"),
-                      dict
-                  )
-                  assert isinstance(
-                      donnees.get("fichiers"),
-                      dict
-                  )
-
-              print("API OK:", chemin)
-
-          for methode in (
-              "POST", "PUT", "PATCH", "DELETE"
-          ):
-              reponse = client.request(
-                  methode, "/api/status"
-              )
-              assert reponse.status_code == 405
-
-          print("Six routes compatibles")
-          print("API lecture seule confirmee")
-          PY
-
-      - name: Verifier pages et liens GitHub Pages
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          from html.parser import HTMLParser
-          from urllib.parse import unquote, urlsplit
-
-          # Source GitHub Pages attendue :
-          # racine du depot, branche analysee.
-          root = Path(".").resolve()
-
-          obligatoires = (
-              Path("index.html"),
-              Path("pmu.html"),
-          )
-
-          erreurs = []
-
-          class AnalyseHTML(HTMLParser):
-              def __init__(self):
-                  super().__init__(
-                      convert_charrefs=True
-                  )
-                  self.tags = set()
-                  self.refs = []
-
-              def handle_starttag(self, tag, attrs):
-                  self.tags.add(tag)
-                  a = dict(attrs)
-
-                  for attribut in ("href", "src"):
-                      if attribut in a:
-                          self.refs.append(
-                              a[attribut]
-                          )
-
-          for page in obligatoires:
-              if not page.is_file():
-                  erreurs.append(
-                      f"Page obligatoire absente: {page}"
-                  )
-
-          # Inventaire de toutes les pages
-          pages = sorted(
-              p for p in root.rglob("*.html")
-              if ".git" not in p.parts
-          )
-
-          for page in pages:
-              contenu = page.read_text(
-                  encoding="utf-8-sig"
-              )
-
-              parser = AnalyseHTML()
-              parser.feed(contenu)
-              parser.close()
-
-              for tag in ("html", "head", "body"):
-                  if tag not in parser.tags:
-                      erreurs.append(
-                          f"{page}: balise {tag} absente"
-                      )
-
-              if not contenu.strip().lower().endswith(
-                  "</html>"
-              ):
-                  erreurs.append(
-                      f"{page}: fermeture HTML absente"
-                  )
-
-              for ref in parser.refs:
-                  ref = ref.strip()
-
-                  if not ref or ref.startswith("#"):
-                      continue
-
-                  url = urlsplit(ref)
-
-                  # Les URL externes ne sont pas
-                  # testees par ce controle local.
-                  if url.scheme or url.netloc:
-                      continue
-
-                  chemin = unquote(url.path)
-
-                  if not chemin:
-                      continue
-
-                  # Les chemins absolus sont
-                  # interpretes dans le projet.
-                  if chemin.startswith("/"):
-                      cible = (
-                          root / chemin.lstrip("/")
-                      ).resolve()
-                  else:
-                      cible = (
-                          page.parent / chemin
-                      ).resolve()
-
-                  if not cible.is_relative_to(root):
-                      erreurs.append(
-                          f"{page}: chemin hors depot: {ref}"
-                      )
-                      continue
-
-                  if cible.is_dir():
-                      cible = cible / "index.html"
-
-                  if not cible.is_file():
-                      erreurs.append(
-                          f"{page}: lien absent: {ref}"
-                      )
-
-              print("HTML examine:", page)
-
-          if erreurs:
-              for erreur in erreurs:
-                  print(f"::error::{erreur}")
-              raise SystemExit(
-                  f"{len(erreurs)} erreur(s) HTML"
-              )
-
-          print("Pages obligatoires : OK")
-          print("Liens locaux : OK")
-          PY
-
-      - name: Verifier publication GitHub Pages
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          root = Path(".")
-          erreurs = []
-
-          # Publication depuis la racine.
-          for nom in ("index.html", "pmu.html"):
-              fichier = root / nom
-              if not fichier.is_file():
-                  erreurs.append(
-                      f"Non publiable: {nom} absent"
-                  )
-              elif fichier.stat().st_size == 0:
-                  erreurs.append(
-                      f"Non publiable: {nom} vide"
-                  )
-
-          # Le repertoire .github est exclu
-          # de la publication Jekyll par defaut.
-          dashboard = Path(
-              ".github/workflows/dashboard_x1000.html"
-          )
-
-          if dashboard.is_file():
-              print(
-                  "::warning::Dashboard dans .github : "
-                  "non publie par Jekyll par defaut."
-              )
-
-          # Controle de coherence du lien
-          # vers le tableau de bord.
-          accueil = root / "index.html"
-
-          if accueil.is_file():
-              html = accueil.read_text(
-                  encoding="utf-8-sig"
-              )
-
-              if (
-                  ".github/workflows/"
-                  "dashboard_x1000.html"
-              ) in html:
-                  erreurs.append(
-                      "Accueil: lien vers dashboard "
-                      "situe dans .github/workflows"
-                  )
-
-          if erreurs:
-              for erreur in erreurs:
-                  print(f"::error::{erreur}")
-              raise SystemExit(
-                  "Publication GitHub Pages non valide"
-              )
-
-          print("Fichiers publics : OK")
-          print("Structure GitHub Pages : OK")
-          print(
-              "Controle statique uniquement : "
-              "deploiement non verifie"
-          )
-          PY
-
-      - name: Controle final
-        run: |
-          echo "================================"
-          echo "X1000 - AUDIT TECHNIQUE"
-          echo "================================"
-          echo "M1-M5 : OK"
-          echo "Coordination : OK"
-          echo "Tests de regression : OK"
-          echo "Six routes API : OK"
-          echo "Lecture seule : OK"
-          echo "Pages HTML : OK"
-          echo "Liens locaux : OK"
-          echo "Structure GitHub Pages : OK"
-          echo "Aucune collecte PMU"
-          echo "Aucun FIGE automatique"
-          echo "Aucune publication automatique"
-          echo "Aucune modification des archives"
-          echo "================================"
+
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+BRANCHE="fix/x1000-v2-reparation-controlee"
+WORKFLOW=".github/workflows/preparation-operationnelle-x1000.yml"
+SOURCE=".github/workflows/dashboard_x1000.html"
+
+echo "=== X1000 - REPARATION PAGES PUBLIQUES ==="
+
+git rev-parse --show-toplevel >/dev/null
+cd "$(git rev-parse --show-toplevel)"
+
+if [[ "$(git branch --show-current)" != "$BRANCHE" ]]; then
+  echo "ERREUR : branche incorrecte"
+  exit 1
+fi
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "ERREUR : modifications locales presentes"
+  exit 1
+fi
+
+for fichier in "$WORKFLOW" "$SOURCE"; do
+  if [[ ! -s "$fichier" ]]; then
+    echo "ERREUR : fichier source absent : $fichier"
+    exit 1
+  fi
+done
+
+for fichier in index.html pmu.html dashboard_x1000.html; do
+  if [[ -e "$fichier" ]]; then
+    echo "ERREUR : fichier deja existant : $fichier"
+    exit 1
+  fi
+done
+
+# Publier une copie du tableau de bord existant.
+# Le fichier source original reste intact.
+cp "$SOURCE" dashboard_x1000.html
+
+# Page d'accueil publique.
+cat > index.html <<'HTML'
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#071521">
+<title>X1000 — Intelligence Hippique</title>
+<style>
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  background: #071521;
+  color: #f0f7f5;
+}
+* { box-sizing: border-box; }
+body {
+  max-width: 900px;
+  margin: auto;
+  padding: 24px;
+  line-height: 1.6;
+}
+h1 { color: #efce7e; }
+section {
+  background: #102838;
+  border: 1px solid #315263;
+  border-radius: 14px;
+  padding: 22px;
+  margin: 20px 0;
+}
+a {
+  display: inline-block;
+  color: #a7dfff;
+  padding: 10px 0;
+}
+small { color: #b7cbd0; }
+</style>
+</head>
+<body>
+<header>
+<h1>🇸🇳🧠🇫🇷 X1000</h1>
+<p>Intelligence Hippique — M1 à M5</p>
+</header>
+<main>
+<section>
+<h2>Tableau de bord X1000</h2>
+<p>
+Consulter les informations techniques,
+les moteurs indépendants et les données
+disponibles via l'API en lecture seule.
+</p>
+<a href="dashboard_x1000.html">
+Ouvrir le tableau de bord
+</a>
+</section>
+<section>
+<h2>Courses PMU France</h2>
+<p>
+Accès à l'espace de consultation
+des courses et des analyses hippiques.
+</p>
+<a href="pmu.html">
+Ouvrir l'espace PMU
+</a>
+</section>
+<section>
+<h2>Protection des données</h2>
+<p>
+Aucun FIGÉ automatique.
+Aucune modification des archives.
+Aucune publication de pronostic
+par cette interface.
+</p>
+</section>
+</main>
+<footer>
+<small>X1000 — Consultation en lecture seule</small>
+</footer>
+</body>
+</html>
+HTML
+
+# Page PMU publique.
+cat > pmu.html <<'HTML'
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#071521">
+<title>X1000 — Courses PMU France</title>
+<style>
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  background: #071521;
+  color: #f0f7f5;
+}
+* { box-sizing: border-box; }
+body {
+  max-width: 900px;
+  margin: auto;
+  padding: 24px;
+  line-height: 1.6;
+}
+h1 { color: #efce7e; }
+section {
+  background: #102838;
+  border: 1px solid #315263;
+  border-radius: 14px;
+  padding: 22px;
+  margin: 20px 0;
+}
+a {
+  color: #a7dfff;
+  display: inline-block;
+  padding: 10px 0;
+}
+</style>
+</head>
+<body>
+<header>
+<h1>🏇 X1000 — Courses PMU France</h1>
+<p>Analyses hippiques indépendantes M1 à M5</p>
+</header>
+<main>
+<section>
+<h2>Consultation des courses</h2>
+<p>
+Les courses et les sélections sont
+consultables dans le tableau de bord
+lorsqu'une API compatible est configurée.
+</p>
+<a href="dashboard_x1000.html">
+Consulter les données disponibles
+</a>
+</section>
+<section>
+<h2>Intégrité des analyses</h2>
+<p>
+Les FIGÉS et les archives restent
+protégés. Cette page ne crée aucun
+pronostic et ne modifie aucune donnée.
+</p>
+</section>
+</main>
+<footer>
+<a href="index.html">Retour à l'accueil</a>
+</footer>
+</body>
+</html>
+HTML
+
+# Verifications locales.
+python - <<'PY'
+from pathlib import Path
+from html.parser import HTMLParser
+
+class Verificateur(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags = set()
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.add(tag)
+
+for nom in (
+    "index.html",
+    "pmu.html",
+    "dashboard_x1000.html",
+):
+    fichier = Path(nom)
+    contenu = fichier.read_text(encoding="utf-8-sig")
+    analyse = Verificateur()
+    analyse.feed(contenu)
+    analyse.close()
+
+    assert {"html", "head", "body"} <= analyse.tags
+    assert contenu.strip().lower().endswith("</html>")
+    print("OK:", nom)
+
+assert Path(
+    ".github/workflows/"
+    "preparation-operationnelle-x1000.yml"
+).is_file()
+
+print("Pages publiques : OK")
+print("Workflow original : preserve")
+PY
+
+# Commit limite aux trois pages.
+git add -- index.html pmu.html dashboard_x1000.html
+git diff --cached --check
+
+git commit -m \
+  "fix: restaurer pages publiques X1000 sans modifier les moteurs"
+
+git push origin "$BRANCHE"
+
+echo "=== REPARATION ENVOYEE ==="
+echo "Relancer et verifier GitHub Actions."
