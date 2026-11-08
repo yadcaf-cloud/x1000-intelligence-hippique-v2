@@ -12,9 +12,7 @@ on:
       - "validation_moteurs.py"
       - "api.py"
       - "tests/**"
-      - "**/index.html"
-      - "**/pmu.html"
-      - "**/dashboard_x1000.html"
+      - "**/*.html"
       - ".github/workflows/preparation-operationnelle-x1000.yml"
 
 permissions:
@@ -22,7 +20,7 @@ permissions:
 
 jobs:
   preparation:
-    name: Controle operationnel M1-M5
+    name: Controle operationnel M1-M5 et site
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -31,21 +29,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-
-      - name: Diagnostiquer les fichiers HTML
-        shell: bash
-        run: |
-          set -eu
-
-          echo "Branche : $GITHUB_REF_NAME"
-          echo "Repertoire : $PWD"
-          echo "Fichiers HTML presents :"
-
-          find . -type f \( \
-            -name 'index.html' -o \
-            -name 'pmu.html' -o \
-            -name 'dashboard_x1000.html' \
-          \) -print
 
       - name: Installer Python
         uses: actions/setup-python@v5
@@ -58,9 +41,10 @@ jobs:
             "fastapi>=0.110,<1" \
             "httpx>=0.27,<1"
 
-      - name: Verifier les fichiers essentiels
+      - name: Verifier fichiers essentiels
+        shell: bash
         run: |
-          set -eu
+          set -euo pipefail
 
           for fichier in \
             coordination_x1000.py \
@@ -75,7 +59,7 @@ jobs:
             api.py
           do
             test -f "$fichier" || {
-              echo "ERREUR: fichier absent: $fichier"
+              echo "::error::Fichier absent: $fichier"
               exit 1
             }
             echo "OK: $fichier"
@@ -104,16 +88,15 @@ jobs:
               print("OK:", fichier)
           PY
 
-      - name: Tester les cinq moteurs
+      - name: Tester moteurs M1-M5
         run: |
           python - <<'PY'
           import integration_x1000 as x
 
           moteurs = x.charger_moteurs()
+          attendus = {"M1", "M2", "M3", "M4", "M5"}
 
-          assert set(moteurs) == {
-              "M1", "M2", "M3", "M4", "M5"
-          }
+          assert set(moteurs) == attendus
 
           course = x.creer_course_test()
           resultat = x.executer_integration(course)
@@ -125,7 +108,7 @@ jobs:
               "predictions_independantes"
           ]
 
-          assert set(predictions) == set(moteurs)
+          assert set(predictions) == attendus
 
           for classement in predictions.values():
               assert len(classement) == 5
@@ -140,10 +123,11 @@ jobs:
               "archives_modifiees",
           )
 
-          for protection in protections:
-              assert resultat[protection] is False
+          for cle in protections:
+              assert resultat[cle] is False
 
-          print("Integration M1-M5 : OK")
+          print("M1-M5 : OK")
+          print("Protections : OK")
           PY
 
       - name: Executer tests de regression
@@ -153,179 +137,311 @@ jobs:
             -p "test_*.py" \
             -v
 
-      - name: Verifier les routes API
+      - name: Controler six routes API
         run: |
           python - <<'PY'
+          from fastapi.testclient import TestClient
           from api import app
 
-          attendues = {
-              "/api/status",
-              "/api/courses",
-              "/api/selections",
-              "/api/figes",
-              "/api/audits",
-              "/api/diagnostic",
-          }
+          noms = (
+              "status",
+              "courses",
+              "selections",
+              "figes",
+              "audits",
+              "diagnostic",
+          )
 
           routes = {
               route.path: route.methods
               for route in app.routes
           }
 
-          assert attendues <= set(routes)
+          client = TestClient(app)
 
-          for chemin in attendues:
+          for nom in noms:
+              chemin = f"/api/{nom}"
+
+              assert chemin in routes, chemin
+
               methodes = routes[chemin]
-
               assert "GET" in methodes
-              assert "POST" not in methodes
-              assert "PUT" not in methodes
-              assert "PATCH" not in methodes
-              assert "DELETE" not in methodes
 
-          print("Routes API : OK")
+              for methode in (
+                  "POST", "PUT", "PATCH", "DELETE"
+              ):
+                  assert methode not in methodes
+
+              reponse = client.get(chemin)
+              assert reponse.status_code == 200, (
+                  chemin, reponse.status_code
+              )
+
+              assert "application/json" in (
+                  reponse.headers.get(
+                      "content-type", ""
+                  )
+              )
+
+              donnees = reponse.json()
+              assert isinstance(donnees, dict)
+
+              if nom in (
+                  "courses",
+                  "selections",
+                  "figes",
+                  "audits",
+              ):
+                  assert isinstance(
+                      donnees.get("disponible"),
+                      bool
+                  )
+                  assert isinstance(
+                      donnees.get("donnees"),
+                      list
+                  )
+
+              if nom == "status":
+                  assert donnees.get(
+                      "mode"
+                  ) == "LECTURE_SEULE_WEB"
+                  assert isinstance(
+                      donnees.get("moteurs"),
+                      dict
+                  )
+
+              if nom == "diagnostic":
+                  assert isinstance(
+                      donnees.get("moteurs"),
+                      dict
+                  )
+                  assert isinstance(
+                      donnees.get("fichiers"),
+                      dict
+                  )
+
+              print("API OK:", chemin)
+
+          for methode in (
+              "POST", "PUT", "PATCH", "DELETE"
+          ):
+              reponse = client.request(
+                  methode, "/api/status"
+              )
+              assert reponse.status_code == 405
+
+          print("Six routes compatibles")
+          print("API lecture seule confirmee")
           PY
 
-      - name: Verifier les pages HTML
+      - name: Verifier pages et liens GitHub Pages
+        shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
           from html.parser import HTMLParser
+          from urllib.parse import unquote, urlsplit
 
-          class ControleHTML(HTMLParser):
+          # Source GitHub Pages attendue :
+          # racine du depot, branche analysee.
+          root = Path(".").resolve()
+
+          obligatoires = (
+              Path("index.html"),
+              Path("pmu.html"),
+          )
+
+          erreurs = []
+
+          class AnalyseHTML(HTMLParser):
               def __init__(self):
-                  super().__init__()
+                  super().__init__(
+                      convert_charrefs=True
+                  )
                   self.tags = set()
-                  self.links = []
+                  self.refs = []
 
               def handle_starttag(self, tag, attrs):
                   self.tags.add(tag)
+                  a = dict(attrs)
 
-                  if tag == "a":
-                      href = dict(attrs).get("href")
-                      if href:
-                          self.links.append(href)
-
-          racine = Path(".")
-
-          noms = (
-              "index.html",
-              "pmu.html",
-              "dashboard_x1000.html",
-          )
-
-          chemins = {}
-
-          for nom in noms:
-              trouves = sorted(
-                  p for p in racine.rglob(nom)
-                  if p.is_file()
-                  and ".git" not in p.parts
-              )
-              chemins[nom] = trouves
-
-              if not trouves:
-                  print(
-                      f"ATTENTION: {nom} absent"
-                  )
-              else:
-                  for fichier in trouves:
-                      print(
-                          f"TROUVE: {fichier}"
-                      )
-
-          for nom, fichiers in chemins.items():
-              for fichier in fichiers:
-                  contenu = fichier.read_text(
-                      encoding="utf-8-sig"
-                  )
-
-                  parser = ControleHTML()
-                  parser.feed(contenu)
-                  parser.close()
-
-                  for tag in ("html", "head", "body"):
-                      if tag not in parser.tags:
-                          raise SystemExit(
-                              f"ERREUR: {fichier}: "
-                              f"balise {tag} absente"
+                  for attribut in ("href", "src"):
+                      if attribut in a:
+                          self.refs.append(
+                              a[attribut]
                           )
 
-                  if not contenu.strip().lower().endswith(
-                      "</html>"
-                  ):
-                      raise SystemExit(
-                          f"ERREUR: {fichier}: "
-                          "fin HTML absente"
-                      )
-
-                  print(
-                      f"HTML valide structurellement: "
-                      f"{fichier}"
+          for page in obligatoires:
+              if not page.is_file():
+                  erreurs.append(
+                      f"Page obligatoire absente: {page}"
                   )
 
-          index_presents = chemins["index.html"]
-          pmu_presents = chemins["pmu.html"]
+          # Inventaire de toutes les pages
+          pages = sorted(
+              p for p in root.rglob("*.html")
+              if ".git" not in p.parts
+          )
 
-          if not index_presents:
-              print(
-                  "ATTENTION: index.html introuvable. "
-                  "Verifier son emplacement."
+          for page in pages:
+              contenu = page.read_text(
+                  encoding="utf-8-sig"
               )
 
-          if not pmu_presents:
-              print(
-                  "ATTENTION: pmu.html introuvable. "
-                  "Verifier son emplacement."
+              parser = AnalyseHTML()
+              parser.feed(contenu)
+              parser.close()
+
+              for tag in ("html", "head", "body"):
+                  if tag not in parser.tags:
+                      erreurs.append(
+                          f"{page}: balise {tag} absente"
+                      )
+
+              if not contenu.strip().lower().endswith(
+                  "</html>"
+              ):
+                  erreurs.append(
+                      f"{page}: fermeture HTML absente"
+                  )
+
+              for ref in parser.refs:
+                  ref = ref.strip()
+
+                  if not ref or ref.startswith("#"):
+                      continue
+
+                  url = urlsplit(ref)
+
+                  # Les URL externes ne sont pas
+                  # testees par ce controle local.
+                  if url.scheme or url.netloc:
+                      continue
+
+                  chemin = unquote(url.path)
+
+                  if not chemin:
+                      continue
+
+                  # Les chemins absolus sont
+                  # interpretes dans le projet.
+                  if chemin.startswith("/"):
+                      cible = (
+                          root / chemin.lstrip("/")
+                      ).resolve()
+                  else:
+                      cible = (
+                          page.parent / chemin
+                      ).resolve()
+
+                  if not cible.is_relative_to(root):
+                      erreurs.append(
+                          f"{page}: chemin hors depot: {ref}"
+                      )
+                      continue
+
+                  if cible.is_dir():
+                      cible = cible / "index.html"
+
+                  if not cible.is_file():
+                      erreurs.append(
+                          f"{page}: lien absent: {ref}"
+                      )
+
+              print("HTML examine:", page)
+
+          if erreurs:
+              for erreur in erreurs:
+                  print(f"::error::{erreur}")
+              raise SystemExit(
+                  f"{len(erreurs)} erreur(s) HTML"
               )
 
-          print("Controle HTML termine")
+          print("Pages obligatoires : OK")
+          print("Liens locaux : OK")
           PY
 
-      - name: Inventorier tableau de bord
+      - name: Verifier publication GitHub Pages
+        shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          candidats = [
-              Path("dashboard_x1000.html"),
-              Path("index.html"),
-              Path("docs/index.html"),
-              Path(
-                  ".github/workflows/"
-                  "dashboard_x1000.html"
-              ),
-          ]
+          root = Path(".")
+          erreurs = []
 
-          presents = [
-              p for p in candidats if p.is_file()
-          ]
-
-          if not presents:
-              print(
-                  "ATTENTION: aucun tableau de bord "
-                  "aux emplacements habituels"
-              )
-          else:
-              for p in presents:
-                  print(
-                      "Tableau de bord trouve:", p
+          # Publication depuis la racine.
+          for nom in ("index.html", "pmu.html"):
+              fichier = root / nom
+              if not fichier.is_file():
+                  erreurs.append(
+                      f"Non publiable: {nom} absent"
+                  )
+              elif fichier.stat().st_size == 0:
+                  erreurs.append(
+                      f"Non publiable: {nom} vide"
                   )
 
+          # Le repertoire .github est exclu
+          # de la publication Jekyll par defaut.
+          dashboard = Path(
+              ".github/workflows/dashboard_x1000.html"
+          )
+
+          if dashboard.is_file():
+              print(
+                  "::warning::Dashboard dans .github : "
+                  "non publie par Jekyll par defaut."
+              )
+
+          # Controle de coherence du lien
+          # vers le tableau de bord.
+          accueil = root / "index.html"
+
+          if accueil.is_file():
+              html = accueil.read_text(
+                  encoding="utf-8-sig"
+              )
+
+              if (
+                  ".github/workflows/"
+                  "dashboard_x1000.html"
+              ) in html:
+                  erreurs.append(
+                      "Accueil: lien vers dashboard "
+                      "situe dans .github/workflows"
+                  )
+
+          if erreurs:
+              for erreur in erreurs:
+                  print(f"::error::{erreur}")
+              raise SystemExit(
+                  "Publication GitHub Pages non valide"
+              )
+
+          print("Fichiers publics : OK")
+          print("Structure GitHub Pages : OK")
           print(
-              "Integration navigateur/API : "
-              "non verifiee par ce workflow"
+              "Controle statique uniquement : "
+              "deploiement non verifie"
           )
           PY
 
       - name: Controle final
         run: |
-          echo "Audit technique termine"
-          echo "Controle HTML termine"
-          echo "Verification moteurs M1-M5 terminee"
-          echo "Verification coordination terminee"
-          echo "Verification API terminee"
+          echo "================================"
+          echo "X1000 - AUDIT TECHNIQUE"
+          echo "================================"
+          echo "M1-M5 : OK"
+          echo "Coordination : OK"
+          echo "Tests de regression : OK"
+          echo "Six routes API : OK"
+          echo "Lecture seule : OK"
+          echo "Pages HTML : OK"
+          echo "Liens locaux : OK"
+          echo "Structure GitHub Pages : OK"
           echo "Aucune collecte PMU"
           echo "Aucun FIGE automatique"
-          echo "Aucune publication"
+          echo "Aucune publication automatique"
           echo "Aucune modification des archives"
+          echo "================================"
