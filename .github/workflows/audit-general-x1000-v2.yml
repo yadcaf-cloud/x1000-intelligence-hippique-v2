@@ -1,0 +1,150 @@
+name: X1000 V2 - Audit general securise
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit-general:
+    name: Audit historique et compatibilite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Installer Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Auditer sans modifier
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -B - <<'PY'
+          import ast
+          import subprocess
+          from pathlib import Path
+
+          root = Path(".")
+          warnings = []
+          errors = []
+
+          def warn(message):
+              warnings.append(message)
+              print("ATTENTION:", message)
+
+          def error(message):
+              errors.append(message)
+              print("ERREUR:", message)
+
+          print("=== X1000 V2 : AUDIT GENERAL ===")
+
+          for name in [
+              "m1", "m2", "m3", "m4", "m5",
+              "noyau_commun"
+          ]:
+              matches = [
+                  p for p in (
+                      root / f"{name}.py",
+                      root / "moteurs" / f"{name}.py"
+                  ) if p.exists()
+              ]
+
+              if not matches:
+                  error(f"Module absent: {name}")
+              elif len(matches) > 1:
+                  warn(f"Modules multiples: {name}")
+              else:
+                  print("MODULE:", matches[0])
+
+          for path in root.rglob("*.py"):
+              if ".git" in path.parts:
+                  continue
+              if path.is_symlink():
+                  warn(f"Lien symbolique: {path}")
+                  continue
+              try:
+                  ast.parse(
+                      path.read_text(encoding="utf-8-sig"),
+                      filename=str(path)
+                  )
+              except (SyntaxError, UnicodeError,
+                      OSError) as exc:
+                  error(f"{path}: {exc}")
+
+          for name in [
+              "coordination_x1000.py",
+              "integration_x1000.py",
+              "validation_moteurs.py"
+          ]:
+              if not Path(name).exists():
+                  warn(f"Coordination non trouvee: {name}")
+
+          scripts = [
+              p for p in root.rglob("*.sh")
+              if ".git" not in p.parts
+          ]
+
+          for path in scripts:
+              result = subprocess.run(
+                  ["bash", "-n", str(path)],
+                  capture_output=True,
+                  text=True
+              )
+              if result.returncode:
+                  error(f"Script invalide: {path}")
+
+          for path in root.rglob("*"):
+              if not path.is_file():
+                  continue
+              if ".git" in path.parts:
+                  continue
+              if path.suffix not in {
+                  ".py", ".sh", ".yml",
+                  ".yaml", ".html", ".md"
+              }:
+                  continue
+              try:
+                  content = path.read_text(
+                      encoding="utf-8-sig"
+                  )
+              except (OSError, UnicodeError):
+                  continue
+              if "PHOENIX" in content.upper():
+                  warn(f"Reference PHOENIX: {path}")
+
+          print("\n=== HISTORIQUE ===")
+          subprocess.run(
+              ["git", "log", "-10", "--oneline"],
+              check=True
+          )
+
+          print("\n=== BILAN ===")
+          print("Erreurs:", len(errors))
+          print("Avertissements:", len(warnings))
+          print("Aucun fichier modifie")
+          print("Aucun FIGE modifie")
+          print("Aucune publication")
+
+          if errors:
+              raise SystemExit(1)
+          PY
+
+      - name: Verifier depot inchange
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code HEAD --
+          git diff --cached --exit-code HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "Depot inchange"
