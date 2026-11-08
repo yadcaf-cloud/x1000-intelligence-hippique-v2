@@ -177,6 +177,10 @@ jobs:
           print("Coordination centrale : OK")
           PY
 
+      # ==========================================
+      # API - CORRECTION HTTPX DELETE
+      # ==========================================
+
       - name: Controler six routes API
         run: |
           python - <<'PY'
@@ -201,6 +205,7 @@ jobs:
                   assert reponse.status_code == 200, (
                       nom,
                       reponse.status_code,
+                      reponse.text,
                   )
 
                   assert isinstance(
@@ -239,22 +244,32 @@ jobs:
                   is False
               )
 
+              # Correction :
+              # client.request() accepte json
+              # pour toutes les methodes HTTP.
+
               for methode in (
-                  "post",
-                  "put",
-                  "patch",
-                  "delete",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE",
               ):
-                  reponse = getattr(
-                      client, methode
-                  )(
+                  reponse = client.request(
+                      methode,
                       "/api/figes",
                       json={}
                   )
 
-                  assert (
-                      reponse.status_code == 405
-                  ), methode
+                  assert reponse.status_code == 405, (
+                      methode,
+                      reponse.status_code,
+                      reponse.text,
+                  )
+
+                  print(
+                      "ECRITURE REFUSEE:",
+                      methode
+                  )
 
           print("Six routes API : OK")
           print("Lecture seule : OK")
@@ -403,6 +418,10 @@ jobs:
             tests/test_fonctionnel_reel_m1_m5.py \
             tests/test_fonctionnel_x1000.py \
             -v
+
+      # ==========================================
+      # PROTECTION DU DEPOT
+      # ==========================================
 
       - name: Verifier integrite du depot
         if: always()
