@@ -12,6 +12,9 @@ on:
       - "validation_moteurs.py"
       - "api.py"
       - "tests/**"
+      - "**/index.html"
+      - "**/pmu.html"
+      - "**/dashboard_x1000.html"
       - ".github/workflows/preparation-operationnelle-x1000.yml"
 
 permissions:
@@ -29,6 +32,21 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Diagnostiquer les fichiers HTML
+        shell: bash
+        run: |
+          set -eu
+
+          echo "Branche : $GITHUB_REF_NAME"
+          echo "Repertoire : $PWD"
+          echo "Fichiers HTML presents :"
+
+          find . -type f \( \
+            -name 'index.html' -o \
+            -name 'pmu.html' -o \
+            -name 'dashboard_x1000.html' \
+          \) -print
+
       - name: Installer Python
         uses: actions/setup-python@v5
         with:
@@ -43,6 +61,7 @@ jobs:
       - name: Verifier les fichiers essentiels
         run: |
           set -eu
+
           for fichier in \
             coordination_x1000.py \
             integration_x1000.py \
@@ -56,9 +75,10 @@ jobs:
             api.py
           do
             test -f "$fichier" || {
-              echo "Fichier absent: $fichier"
+              echo "ERREUR: fichier absent: $fichier"
               exit 1
             }
+            echo "OK: $fichier"
           done
 
       - name: Verifier syntaxe Python
@@ -75,6 +95,7 @@ jobs:
               *Path("moteurs").glob("*.py"),
               *Path("tests").glob("test_*.py"),
           ]
+
           for fichier in fichiers:
               ast.parse(
                   fichier.read_text(encoding="utf-8"),
@@ -89,6 +110,7 @@ jobs:
           import integration_x1000 as x
 
           moteurs = x.charger_moteurs()
+
           assert set(moteurs) == {
               "M1", "M2", "M3", "M4", "M5"
           }
@@ -98,24 +120,27 @@ jobs:
 
           assert resultat["nombre_moteurs"] == 5
           assert resultat["coordination_complete"]
-          assert set(
-              resultat["predictions_independantes"]
-          ) == set(moteurs)
 
-          for classement in resultat[
+          predictions = resultat[
               "predictions_independantes"
-          ].values():
+          ]
+
+          assert set(predictions) == set(moteurs)
+
+          for classement in predictions.values():
               assert len(classement) == 5
               assert len(set(classement)) == 5
               assert 7 not in classement
 
-          for protection in (
+          protections = (
               "publication_autorisee",
               "fige_officiel",
               "fige_automatique",
               "validation_officielle",
               "archives_modifiees",
-          ):
+          )
+
+          for protection in protections:
               assert resultat[protection] is False
 
           print("Integration M1-M5 : OK")
@@ -151,6 +176,7 @@ jobs:
 
           for chemin in attendues:
               methodes = routes[chemin]
+
               assert "GET" in methodes
               assert "POST" not in methodes
               assert "PUT" not in methodes
@@ -158,6 +184,102 @@ jobs:
               assert "DELETE" not in methodes
 
           print("Routes API : OK")
+          PY
+
+      - name: Verifier les pages HTML
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from html.parser import HTMLParser
+
+          class ControleHTML(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.tags = set()
+                  self.links = []
+
+              def handle_starttag(self, tag, attrs):
+                  self.tags.add(tag)
+
+                  if tag == "a":
+                      href = dict(attrs).get("href")
+                      if href:
+                          self.links.append(href)
+
+          racine = Path(".")
+
+          noms = (
+              "index.html",
+              "pmu.html",
+              "dashboard_x1000.html",
+          )
+
+          chemins = {}
+
+          for nom in noms:
+              trouves = sorted(
+                  p for p in racine.rglob(nom)
+                  if p.is_file()
+                  and ".git" not in p.parts
+              )
+              chemins[nom] = trouves
+
+              if not trouves:
+                  print(
+                      f"ATTENTION: {nom} absent"
+                  )
+              else:
+                  for fichier in trouves:
+                      print(
+                          f"TROUVE: {fichier}"
+                      )
+
+          for nom, fichiers in chemins.items():
+              for fichier in fichiers:
+                  contenu = fichier.read_text(
+                      encoding="utf-8-sig"
+                  )
+
+                  parser = ControleHTML()
+                  parser.feed(contenu)
+                  parser.close()
+
+                  for tag in ("html", "head", "body"):
+                      if tag not in parser.tags:
+                          raise SystemExit(
+                              f"ERREUR: {fichier}: "
+                              f"balise {tag} absente"
+                          )
+
+                  if not contenu.strip().lower().endswith(
+                      "</html>"
+                  ):
+                      raise SystemExit(
+                          f"ERREUR: {fichier}: "
+                          "fin HTML absente"
+                      )
+
+                  print(
+                      f"HTML valide structurellement: "
+                      f"{fichier}"
+                  )
+
+          index_presents = chemins["index.html"]
+          pmu_presents = chemins["pmu.html"]
+
+          if not index_presents:
+              print(
+                  "ATTENTION: index.html introuvable. "
+                  "Verifier son emplacement."
+              )
+
+          if not pmu_presents:
+              print(
+                  "ATTENTION: pmu.html introuvable. "
+                  "Verifier son emplacement."
+              )
+
+          print("Controle HTML termine")
           PY
 
       - name: Inventorier tableau de bord
@@ -169,6 +291,10 @@ jobs:
               Path("dashboard_x1000.html"),
               Path("index.html"),
               Path("docs/index.html"),
+              Path(
+                  ".github/workflows/"
+                  "dashboard_x1000.html"
+              ),
           ]
 
           presents = [
@@ -178,11 +304,13 @@ jobs:
           if not presents:
               print(
                   "ATTENTION: aucun tableau de bord "
-                  "trouve aux chemins attendus"
+                  "aux emplacements habituels"
               )
           else:
               for p in presents:
-                  print("Tableau de bord trouve:", p)
+                  print(
+                      "Tableau de bord trouve:", p
+                  )
 
           print(
               "Integration navigateur/API : "
@@ -193,6 +321,10 @@ jobs:
       - name: Controle final
         run: |
           echo "Audit technique termine"
+          echo "Controle HTML termine"
+          echo "Verification moteurs M1-M5 terminee"
+          echo "Verification coordination terminee"
+          echo "Verification API terminee"
           echo "Aucune collecte PMU"
           echo "Aucun FIGE automatique"
           echo "Aucune publication"
