@@ -30,7 +30,7 @@ jobs:
 
     steps:
       - name: Recuperer le depot
-        uses: actions/checkout@v4.3.1
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
 
@@ -52,7 +52,7 @@ jobs:
           echo "X1000_DATA_DIR=$RUNNER_TEMP/x1000-data" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/x1000-data"
 
-      - name: Verifier le tableau de bord
+      - name: Verifier les pages HTML
         shell: bash
         run: |
           python -B - <<'PY'
@@ -62,45 +62,58 @@ jobs:
           class ControleHTML(HTMLParser):
               def __init__(self):
                   super().__init__()
-                  self.html = False
-                  self.head = False
-                  self.body = False
+                  self.tags = set()
 
               def handle_starttag(self, tag, attrs):
-                  if tag == "html":
-                      self.html = True
-                  elif tag == "head":
-                      self.head = True
-                  elif tag == "body":
-                      self.body = True
+                  self.tags.add(tag)
 
-          pages = (
-              Path(".github/workflows/dashboard_x1000.html"),
-              Path("index.html"),
-              Path("pmu.html"),
+          dashboard = Path(
+              ".github/workflows/dashboard_x1000.html"
           )
 
-          presentes = [p for p in pages if p.is_file()]
-
-          if not presentes:
+          if not dashboard.is_file():
               raise SystemExit(
-                  "ERREUR: aucun tableau de bord HTML trouve"
+                  "ERREUR: tableau de bord principal absent"
               )
 
-          for fichier in presentes:
+          pages = [
+              dashboard,
+              Path("index.html"),
+              Path("pmu.html"),
+          ]
+
+          for fichier in pages:
+              if not fichier.is_file():
+                  print(
+                      "::warning title=Page absente::"
+                      + str(fichier)
+                  )
+                  continue
+
               contenu = fichier.read_text(
                   encoding="utf-8-sig"
               )
-              controle = ControleHTML()
-              controle.feed(contenu)
 
-              assert controle.html, f"{fichier}: html absent"
-              assert controle.head, f"{fichier}: head absent"
-              assert controle.body, f"{fichier}: body absent"
+              parser = ControleHTML()
+              parser.feed(contenu)
+              parser.close()
 
-              print(f"{fichier}: structure HTML OK")
+              for tag in ("html", "head", "body"):
+                  if tag not in parser.tags:
+                      raise SystemExit(
+                          f"ERREUR: {fichier}: {tag} absent"
+                      )
 
-          print("Diagnostic HTML : OK")
+              if not contenu.strip().lower().endswith(
+                  "</html>"
+              ):
+                  raise SystemExit(
+                      f"ERREUR: {fichier}: fin HTML absente"
+                  )
+
+              print(f"OK: {fichier}")
+
+          print("Controle HTML termine")
           PY
 
       - name: Verifier API et moteurs
@@ -127,16 +140,25 @@ jobs:
                   )
                   print(route, "OK")
 
-              status = client.get("/api/status").json()
-              moteurs = status["moteurs"]
+              status = client.get(
+                  "/api/status"
+              ).json()
 
-              assert set(moteurs) == {
+              assert set(status["moteurs"]) == {
                   "M1", "M2", "M3", "M4", "M5"
               }
 
-              assert status["collecte_automatique"] is False
-              assert status["figes_automatiques"] is False
-              assert status["publication_automatique"] is False
+              assert status[
+                  "collecte_automatique"
+              ] is False
+
+              assert status[
+                  "figes_automatiques"
+              ] is False
+
+              assert status[
+                  "publication_automatique"
+              ] is False
 
               for route in routes:
                   for method in (
@@ -146,14 +168,16 @@ jobs:
                           method, route
                       )
                       assert response.status_code == 405, (
-                          route, method, response.status_code
+                          route,
+                          method,
+                          response.status_code
                       )
 
           print("API lecture seule : OK")
-          print("Moteurs M1 a M5 references : OK")
+          print("M1 a M5 references : OK")
           PY
 
-      - name: Verifier aucune modification
+      - name: Verifier absence de modification
         if: always()
         shell: bash
         run: |
@@ -174,16 +198,18 @@ jobs:
         shell: bash
         run: |
           {
-            echo "## X1000 V2 - Tableau de bord"
+            echo "## X1000 V2 - Diagnostic"
             echo ""
-            echo "Resultat du job : ${{ job.status }}"
+            echo "Statut : ${{ job.status }}"
             echo ""
-            echo "- Verification HTML du tableau existant"
+            echo "- Controle HTML des pages presentes"
+            echo "- Signalement des pages absentes"
             echo "- Verification des six routes API"
-            echo "- Verification des cinq moteurs"
-            echo "- Controle lecture seule"
-            echo "- Controle absence de modification"
+            echo "- Verification des references M1 a M5"
+            echo "- Controle des methodes interdites"
+            echo "- Verification du depot inchange"
             echo ""
-            echo "Aucun FIGE ni pronostic genere."
+            echo "Aucun FIGE genere."
             echo "Aucune archive modifiee."
+            echo "Aucune publication automatique."
           } >> "$GITHUB_STEP_SUMMARY"
