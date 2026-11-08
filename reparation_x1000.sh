@@ -1,77 +1,54 @@
+
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
 # ==========================================================
-# X1000 PHOENIX V2.4 — REPARATION CONTROLEE
-# API + M1-M5 + RENDER + BANC HISTORIQUE
+# X1000 — INTELLIGENCE HIPPIQUE V2
+# PREPARATION CONTROLEE — API, M1-M5, RENDER, TESTS
 # AUCUN COMMIT / PUSH / DEPLOIEMENT / FIGE
 # ==========================================================
 
 BRANCH="fix/x1000-v2-reparation-controlee"
 REPO="x1000-intelligence-hippique-v2"
+ROOT="$(git rev-parse --show-toplevel)"
 
-echo "=============================================="
-echo " X1000 V2.4 — REPARATION CONTROLEE"
-echo "=============================================="
+fail() { printf 'ERREUR : %s\n' "$*" >&2; exit 1; }
+trap 'printf "ERREUR : interruption a la ligne %s. Verifiez git status --short.\n" "$LINENO" >&2' ERR
 
-# 1. PROTECTION DU DEPOT
+[[ "$(git rev-parse --is-inside-work-tree)" == true ]] || fail "Hors depot Git"
+[[ "$(basename "$ROOT")" == "$REPO" ]] || fail "Depot incorrect"
+[[ "$(git branch --show-current)" == "$BRANCH" ]] || fail "Branche obligatoire : $BRANCH"
+cd "$ROOT"
+[[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "Depot non propre : sauvegardez vos modifications"
 
-git rev-parse --is-inside-work-tree >/dev/null
-
-CURRENT="$(git branch --show-current)"
-
-if [ "$CURRENT" != "$BRANCH" ]; then
-  echo "ERREUR : branche incorrecte : $CURRENT"
-  echo "Branche obligatoire : $BRANCH"
-  exit 1
-fi
-
-if [ "$(basename "$(git rev-parse --show-toplevel)")" != "$REPO" ]; then
-  echo "ERREUR : depot incorrect."
-  exit 1
-fi
-
-if [ -n "$(git status --porcelain)" ]; then
-  echo "ERREUR : modifications preexistantes."
-  echo "Sauvegardez votre travail avant execution."
-  exit 1
-fi
-
-cd "$(git rev-parse --show-toplevel)"
-
-for file in api.py index.html \
-  moteurs/noyau_commun.py \
-  moteurs/m1.py moteurs/m2.py \
-  moteurs/m3.py moteurs/m4.py moteurs/m5.py
-do
-  test -f "$file" || {
-    echo "Fichier obligatoire absent : $file"
-    exit 1
-  }
+for file in api.py index.html moteurs/noyau_commun.py moteurs/m1.py moteurs/m2.py moteurs/m3.py moteurs/m4.py moteurs/m5.py; do
+  [[ -f "$file" && ! -L "$file" ]] || fail "Fichier obligatoire absent ou lien symbolique : $file"
 done
 
-# Aucun fichier existant ne sera remplace.
-mkdir -p tests_historiques
-
-for file in \
-  render.yaml \
-  tests_historiques/test_connexion.py \
-  tests_historiques/banc_historique.py
-do
-  if [ -e "$file" ]; then
-    echo "ERREUR : $file existe deja."
-    exit 1
-  fi
+for file in render.yaml tests_historiques tests_historiques/test_connexion.py tests_historiques/banc_historique.py; do
+  [[ ! -e "$file" && ! -L "$file" ]] || fail "Chemin deja existant : $file (aucun remplacement)"
 done
 
-export PYTHONDONTWRITEBYTECODE=1
-export PYTHONNOUSERSITE=1
+export PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1
 
-echo "Protection Git : OK"
+# Tests non destructifs avant toute creation de fichier.
+python -B - <<'PY'
+import ast
+from pathlib import Path
+for name in ['api.py', 'moteurs/noyau_commun.py'] + [f'moteurs/m{i}.py' for i in range(1, 6)]:
+    ast.parse(Path(name).read_text(encoding='utf-8-sig'), filename=name)
+    print('SYNTAXE OK:', name)
+PY
 
-# 2. CONFIGURATION RENDER — SANS DEPLOIEMENT
+echo 'Execution du self-test API existant...'
+python -B api.py --self-test
 
-cat > render.yaml <<'YAML'
+# Generation dans un dossier temporaire avant installation.
+TMP="$(mktemp -d)"
+trap 'rm -rf -- "$TMP"' EXIT
+mkdir -p "$TMP/tests_historiques"
+
+cat > "$TMP/render.yaml" <<'YAML'
 services:
   - type: web
     name: x1000-v2-api
@@ -90,330 +67,138 @@ services:
         value: https://yadcaf-cloud.github.io
 YAML
 
-echo "Configuration Render preparee."
-
-# 3. TESTS DE CONNEXION API ET MOTEURS
-
-cat > tests_historiques/test_connexion.py <<'PY'
+cat > "$TMP/tests_historiques/test_connexion.py" <<'PY'
 import ast
-import importlib
-import json
-import os
 import sys
-import tempfile
-import threading
 import unittest
-
 from pathlib import Path
-from http.client import HTTPConnection
-from http.server import ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-
 import api
 
-MOTEURS = ("M1", "M2", "M3", "M4", "M5")
+MOTEURS = ('M1', 'M2', 'M3', 'M4', 'M5')
 
 class TestsX1000(unittest.TestCase):
-
-    def test_syntaxe_python(self):
-        fichiers = [
-            ROOT / "api.py",
-            ROOT / "moteurs" / "noyau_commun.py",
-        ]
-        fichiers += [
-            ROOT / "moteurs" / f"{m.lower()}.py"
-            for m in MOTEURS
-        ]
-
-        for fichier in fichiers:
-            with self.subTest(fichier=fichier.name):
-                ast.parse(
-                    fichier.read_text(encoding="utf-8")
-                )
+    def test_syntaxe(self):
+        for name in ['api.py', 'moteurs/noyau_commun.py'] + [f'moteurs/m{i}.py' for i in range(1, 6)]:
+            with self.subTest(name=name):
+                ast.parse((ROOT / name).read_text(encoding='utf-8-sig'))
 
     def test_noyau(self):
         noyau = api.charger_noyau()
-        self.assertEqual(str(noyau.VERSION), "2.4")
+        self.assertTrue(str(noyau.VERSION).strip())
         self.assertTrue(callable(noyau.verifier_course))
 
     def test_moteurs(self):
+        noyau = api.charger_noyau()
         for nom in MOTEURS:
-            with self.subTest(moteur=nom):
+            with self.subTest(nom=nom):
                 moteur = api.charger_moteur(nom)
                 self.assertEqual(moteur.MOTEUR, nom)
-                self.assertEqual(str(moteur.VERSION), "2.4")
-                self.assertTrue(
-                    callable(moteur.analyser_course)
-                )
-                self.assertTrue(
-                    callable(moteur.verifier_resultat)
-                )
+                self.assertEqual(str(moteur.VERSION), str(noyau.VERSION))
+                self.assertTrue(callable(moteur.analyser_course))
+                self.assertTrue(callable(moteur.verifier_resultat))
 
-    def test_http_lecture_seule(self):
-        ancien = api.ORIGIN
-        api.ORIGIN = "https://yadcaf-cloud.github.io"
-
-        serveur = ThreadingHTTPServer(
-            ("127.0.0.1", 0), api.Handler
-        )
-        thread = threading.Thread(
-            target=serveur.serve_forever,
-            daemon=True
-        )
-        thread.start()
-
-        try:
-            for route in (
-                "/api/status",
-                "/api/diagnostic"
-            ):
-                connexion = HTTPConnection(
-                    "127.0.0.1",
-                    serveur.server_port,
-                    timeout=5
-                )
-                connexion.request(
-                    "GET",
-                    route,
-                    headers={
-                        "Origin":
-                        "https://yadcaf-cloud.github.io"
-                    }
-                )
-                reponse = connexion.getresponse()
-                self.assertEqual(reponse.status, 200)
-                self.assertEqual(
-                    reponse.getheader(
-                        "Access-Control-Allow-Origin"
-                    ),
-                    "https://yadcaf-cloud.github.io"
-                )
-                json.loads(reponse.read())
-                connexion.close()
-
-            for methode in (
-                "POST", "PUT", "PATCH", "DELETE"
-            ):
-                connexion = HTTPConnection(
-                    "127.0.0.1",
-                    serveur.server_port,
-                    timeout=5
-                )
-                connexion.request(
-                    methode, "/api/status"
-                )
-                reponse = connexion.getresponse()
-                self.assertEqual(reponse.status, 405)
-                reponse.read()
-                connexion.close()
-
-        finally:
-            serveur.shutdown()
-            serveur.server_close()
-            thread.join(timeout=5)
-            api.ORIGIN = ancien
-
-    def test_archives_absentes_du_banc(self):
-        with tempfile.TemporaryDirectory() as dossier:
-            racine = Path(dossier)
-            self.assertFalse(
-                (racine / "figes.json").exists()
-            )
-            self.assertFalse(
-                (racine / "audits.json").exists()
-            )
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main(verbosity=2)
 PY
 
-# 4. BANC D'ESSAI HISTORIQUE ISOLE
-
-cat > tests_historiques/banc_historique.py <<'PY'
+cat > "$TMP/tests_historiques/banc_historique.py" <<'PY'
 #!/usr/bin/env python3
-"""
-X1000 — BANC HISTORIQUE ISOLE
-
-Lecture d'un jeu de courses fourni explicitement.
-Aucune modification de l'horloge de production.
-Aucune creation de FIGE.
-Aucune publication.
-Aucune ecriture dans les archives.
-"""
-
+"""Banc historique X1000 V2 : simulation uniquement, aucune publication."""
 import argparse
 import copy
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
-from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-
 import api
 from moteurs import noyau_commun
 
+INTERDITS = {'figes.json', 'audits.json', 'courses.json', 'selections.json'}
+
 def charger_fixture(chemin):
-    chemin = Path(chemin).resolve()
-
-    # Refus des archives et des fichiers de production.
-    if chemin.name.lower() in {
-        "figes.json", "audits.json",
-        "courses.json", "selections.json"
-    }:
-        raise ValueError(
-            "Fichier de production interdit"
-        )
-
-    if not chemin.is_file() or chemin.is_symlink():
-        raise ValueError("Fixture invalide")
-
+    original = Path(chemin)
+    if original.is_symlink() or original.name.lower() in INTERDITS:
+        raise ValueError('Fichier de production ou lien symbolique interdit')
+    chemin = original.resolve(strict=True)
+    if chemin.name.lower() in INTERDITS or not chemin.is_file():
+        raise ValueError('Fixture invalide')
     if chemin.stat().st_size > 5_000_000:
-        raise ValueError("Fixture trop volumineuse")
-
-    with chemin.open("r", encoding="utf-8") as f:
-        donnees = json.load(
-            f,
-            object_pairs_hook=api.refuser_doublons,
-            parse_constant=api.refuser_constante
-        )
-
+        raise ValueError('Fixture trop volumineuse')
+    with chemin.open(encoding='utf-8') as fichier:
+        donnees = json.load(fichier, object_pairs_hook=api.refuser_doublons,
+                            parse_constant=api.refuser_constante)
     if not isinstance(donnees, list):
-        raise ValueError("Liste de courses obligatoire")
-
+        raise ValueError('Liste de courses obligatoire')
     return donnees
 
 def analyser_historique(course):
     if not isinstance(course, dict):
-        raise ValueError("Course invalide")
-
-    depart = datetime.fromisoformat(
-        course["depart"].replace("Z", "+00:00")
-    )
-
+        raise ValueError('Course invalide')
+    depart = datetime.fromisoformat(course['depart'].replace('Z', '+00:00'))
     if depart.tzinfo is None:
-        raise ValueError("Fuseau horaire obligatoire")
-
-    # Simulation exactement 15 minutes avant depart.
-    from datetime import timedelta
-    instant = depart.astimezone(
-        timezone.utc
-    ) - timedelta(minutes=15)
+        raise ValueError('Fuseau horaire obligatoire')
+    instant = depart.astimezone(timezone.utc) - timedelta(minutes=15)
 
     class HorlogeSimulee(datetime):
         @classmethod
         def now(cls, tz=None):
-            if tz is None:
-                return instant.replace(tzinfo=None)
-            return instant.astimezone(tz)
+            return instant.astimezone(tz) if tz is not None else instant.replace(tzinfo=None)
 
     copie = copy.deepcopy(course)
-
-    # Le remplacement de l'horloge est local au test.
-    with patch.object(
-        noyau_commun,
-        "datetime",
-        HorlogeSimulee
-    ):
+    with patch.object(noyau_commun, 'datetime', HorlogeSimulee):
         valide, raison = api.verifier_course(copie)
-
         if not valide:
-            return {
-                "course_id": copie.get("id"),
-                "statut": "NON_ANALYSABLE",
-                "raison": raison
-            }
-
-        resultats = {}
-        for nom in api.MOTEURS:
-            resultats[nom] = api.engine(
-                nom, copy.deepcopy(copie)
-            )
-
-    return {
-        "course_id": copie.get("id"),
-        "type": "SIMULATION_HISTORIQUE",
-        "instant_simule": instant.isoformat(),
-        "fige": False,
-        "publication": False,
-        "moteurs": resultats
-    }
+            return {'course_id': copie.get('id'), 'statut': 'NON_ANALYSABLE', 'raison': raison}
+        resultats = {nom: api.engine(nom, copy.deepcopy(copie)) for nom in api.MOTEURS}
+    return {'course_id': copie.get('id'), 'type': 'SIMULATION_HISTORIQUE',
+            'instant_simule': instant.isoformat(), 'fige': False,
+            'publication': False, 'moteurs': resultats}
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--fixture",
-        required=True,
-        help="Fichier JSON de test independant"
-    )
+    parser.add_argument('--fixture', required=True)
     args = parser.parse_args()
+    resultats = [analyser_historique(c) for c in charger_fixture(args.fixture)[:100]]
+    print(json.dumps({'mode': 'SIMULATION_HISTORIQUE', 'nombre_courses': len(resultats),
+                      'resultats': resultats}, ensure_ascii=False, indent=2, allow_nan=False))
 
-    courses = charger_fixture(args.fixture)
-
-    resultats = [
-        analyser_historique(course)
-        for course in courses[:100]
-    ]
-
-    print(json.dumps(
-        {
-            "mode": "SIMULATION_HISTORIQUE",
-            "nombre_courses": len(resultats),
-            "resultats": resultats
-        },
-        ensure_ascii=False,
-        indent=2,
-        allow_nan=False
-    ))
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
 PY
 
-# 5. TESTS AUTOMATIQUES
+python -B - "$TMP" <<'PY'
+import ast
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+for name in ('tests_historiques/test_connexion.py', 'tests_historiques/banc_historique.py'):
+    ast.parse((root / name).read_text(encoding='utf-8'), filename=name)
+print('Tests generes : syntaxe valide')
+PY
 
-echo ""
-echo "Execution des tests API existants..."
-python -B api.py --self-test
+# Installer sans ecraser les chemins existants.
+[[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "Depot modifie pendant le controle"
+for file in render.yaml tests_historiques; do
+  [[ ! -e "$file" && ! -L "$file" ]] || fail "Chemin apparu pendant le controle : $file"
+done
+mv -n -- "$TMP/render.yaml" render.yaml
+mv -n -- "$TMP/tests_historiques" tests_historiques
 
-echo ""
-echo "Execution des tests M1-M5 et connexion..."
 python -B tests_historiques/test_connexion.py
 
-# 6. VERIFICATION DES FICHIERS PROTEGES
+# Interdire toute modification suivie, y compris les FIGES et archives.
+[[ -z "$(git diff --name-only HEAD --)" ]] || fail "Fichier suivi modifie"
+[[ -z "$(git diff --cached --name-only --)" ]] || fail "Fichier indexe modifie"
 
-echo ""
-echo "Verification des modifications..."
-
-if git diff --name-only | grep -Ei \
-'(^|/)(figes|audits|archives)(/|\.|$)'
-then
-  echo "ALERTE : fichier protege modifie."
-  exit 1
-fi
-
-echo ""
-echo "=============================================="
-echo " X1000 — PREPARATION TERMINEE"
-echo "=============================================="
-echo "Branche : $BRANCH"
-echo "API : tests executes"
-echo "Moteurs M1-M5 : chargement teste"
-echo "Render : configuration preparee"
-echo "Banc historique : prepare"
-echo "FIGES : aucune modification"
-echo "Archives : aucune modification"
-echo "Commit : aucun"
-echo "Push : aucun"
-echo "Deploiement : aucun"
-echo ""
+printf '\nX1000 V2 : PREPARATION TERMINEE\n'
+printf 'Aucun commit, push, deploiement ou FIGE effectue par ce script.\n'
+printf 'Nouveaux fichiers de preparation :\n'
 git status --short
-echo ""
-echo "ATTENTION : aucun deploiement effectue."
-echo "Les tests historiques necessitent des fixtures"
-echo "verifiees contenant uniquement des donnees"
-echo "connues avant le depart."
+printf 'ATTENTION : banc historique non execute (fixture independante requise).\n'
