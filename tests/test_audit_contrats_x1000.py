@@ -1,210 +1,42 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+#!/bin/bash
 
-"""
-X1000 INTELLIGENCE HIPPIQUE V2
-AUDIT TECHNIQUE DES MOTEURS M1 A M5
+set -e
 
-Tests sur donnees exclusivement synthetiques.
+cd ~/x1000-intelligence-hippique-v2 || exit 1
 
-INTERDICTIONS :
-- Aucune collecte PMU automatique
-- Aucun FIGE automatique ou retroactif
-- Aucune publication automatique
-- Aucune modification des archives
-- Aucune modification des pronostics
-- Aucune ecriture de donnees metier
-"""
+echo "=== X1000 PHOENIX - RENOMMAGE CONTROLE ==="
 
-import copy
-import importlib
-import unittest
+BRANCHE="fix/x1000-v2-reparation-controlee"
 
-from datetime import datetime, timedelta, timezone
+if [ "$(git branch --show-current)" != "$BRANCHE" ]; then
+    echo "ERREUR : branche non autorisee"
+    exit 1
+fi
 
-from moteurs import noyau_commun
+ANCIEN="tests/test_audit_contrats_x1000.py"
+NOUVEAU="tests/test_audit_moteurs_m1_m5_synthetique.py"
 
+if [ ! -f "$ANCIEN" ]; then
+    echo "ERREUR : fichier original introuvable"
+    exit 1
+fi
 
-MOTEURS = ("M1", "M2", "M3", "M4", "M5")
+if [ -e "$NOUVEAU" ]; then
+    echo "ERREUR : nouveau nom deja utilise"
+    exit 1
+fi
 
+git mv "$ANCIEN" "$NOUVEAU"
 
-def course_synthetique():
-    """Construit une course fictive pour les tests."""
+echo "=== VERIFICATION SYNTAXE ==="
+python -m py_compile "$NOUVEAU"
 
-    depart = (
-        datetime.now(timezone.utc)
-        + timedelta(days=2)
-    ).replace(microsecond=0).isoformat()
+echo "=== TESTS PYTEST ==="
+python -m pytest -q --import-mode=importlib
+RESULTAT=$?
 
-    partants = []
+echo "=== ETAT GIT ==="
+git status --short
 
-    for numero in range(1, 8):
-
-        cheval = {
-            "numero": numero,
-            "nom": f"TEST_{numero}",
-            "non_partant": numero == 7,
-        }
-
-        for nom in MOTEURS:
-
-            module = importlib.import_module(
-                f"moteurs.{nom.lower()}"
-            )
-
-            cheval[module.CHAMP] = {
-                critere: 50 + numero
-                for critere in module.POIDS
-            }
-
-        partants.append(cheval)
-
-    return {
-        "id": "TEST-SYNTHETIQUE-NON-PMU",
-        "localisation_france_verifiee": True,
-        "depart_verifie": True,
-        "depart": depart,
-        "partants": partants,
-        "nombre_partants": 6,
-        "non_partants": [7],
-    }
-
-
-class TestContratsX1000(unittest.TestCase):
-
-    def test_cinq_moteurs_independants(self):
-        """Verifie les cinq moteurs et leurs classements."""
-
-        course = course_synthetique()
-        original = copy.deepcopy(course)
-
-        for nom in MOTEURS:
-
-            with self.subTest(moteur=nom):
-
-                module = importlib.import_module(
-                    f"moteurs.{nom.lower()}"
-                )
-
-                self.assertEqual(
-                    module.MOTEUR, nom
-                )
-
-                module.verifier_noyau()
-
-                sortie = module.analyser_course(
-                    copy.deepcopy(course)
-                )
-
-                noyau_commun.verifier_sortie_analyse(
-                    sortie, course
-                )
-
-                self.assertEqual(
-                    sortie["statut"],
-                    "ANALYSE_DISPONIBLE"
-                )
-
-                self.assertEqual(
-                    len(sortie["classement"]), 5
-                )
-
-                self.assertFalse(
-                    sortie["fige"]
-                )
-
-                self.assertFalse(
-                    sortie["publication"]
-                )
-
-                numeros = [
-                    cheval["numero"]
-                    for cheval in sortie["classement"]
-                ]
-
-                self.assertEqual(
-                    len(numeros),
-                    len(set(numeros))
-                )
-
-                self.assertNotIn(
-                    7, numeros
-                )
-
-        self.assertEqual(
-            course, original
-        )
-
-    def test_course_passee_refusee(self):
-        """Une course terminee doit etre refusee."""
-
-        course = course_synthetique()
-
-        course["depart"] = (
-            datetime.now(timezone.utc)
-            - timedelta(days=1)
-        ).isoformat()
-
-        valide, _ = noyau_commun.verifier_course(
-            course
-        )
-
-        self.assertFalse(valide)
-
-    def test_non_partant_incoherent_refuse(self):
-        """Refuse une liste incoherente de non-partants."""
-
-        course = course_synthetique()
-
-        course["non_partants"] = []
-
-        valide, _ = noyau_commun.verifier_course(
-            course
-        )
-
-        self.assertFalse(valide)
-
-    def test_donnees_absentes_sans_pronostic(self):
-        """Aucun classement complet sans indicateurs."""
-
-        course = course_synthetique()
-
-        for cheval in course["partants"]:
-
-            for nom in MOTEURS:
-
-                module = importlib.import_module(
-                    f"moteurs.{nom.lower()}"
-                )
-
-                cheval.pop(
-                    module.CHAMP, None
-                )
-
-        for nom in MOTEURS:
-
-            with self.subTest(moteur=nom):
-
-                module = importlib.import_module(
-                    f"moteurs.{nom.lower()}"
-                )
-
-                sortie = module.analyser_course(
-                    copy.deepcopy(course)
-                )
-
-                self.assertEqual(
-                    sortie["classement"], []
-                )
-
-                self.assertFalse(
-                    sortie["fige"]
-                )
-
-                self.assertFalse(
-                    sortie["publication"]
-                )
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+echo "Code retour Pytest : $RESULTAT"
+echo "AUCUN COMMIT, PUSH OU DEPLOIEMENT"
