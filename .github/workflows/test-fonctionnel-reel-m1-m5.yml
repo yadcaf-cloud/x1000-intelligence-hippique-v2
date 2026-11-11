@@ -9,6 +9,10 @@ name: X1000 - Test fonctionnel reel M1-M5
     paths:
       - "moteurs/**"
       - "tests/**"
+      - "coordination_x1000.py"
+      - "integration_x1000.py"
+      - "validation_moteurs.py"
+      - "api.py"
       - ".github/workflows/test-fonctionnel-reel-m1-m5.yml"
 
 permissions:
@@ -20,7 +24,7 @@ concurrency:
 
 jobs:
   diagnostic:
-    name: X1000 - Diagnostic M1 a M5
+    name: Diagnostic controle M1-M5
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
@@ -32,10 +36,11 @@ jobs:
       TZ: Europe/Paris
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
+      PYTHONPATH: ${{ github.workspace }}
       X1000_READ_ONLY: "1"
       X1000_NO_FIGE: "1"
       X1000_NO_PUBLICATION: "1"
-      PYTHONPATH: ${{ github.workspace }}
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
 
     steps:
       - name: Recuperer le depot
@@ -88,15 +93,27 @@ jobs:
               for i in range(1, 6)
           )
 
+          for nom in (
+              "coordination_x1000.py",
+              "integration_x1000.py",
+              "validation_moteurs.py",
+              "api.py",
+          ):
+              chemin = Path(nom)
+              if chemin.is_file():
+                  fichiers.append(chemin)
+
           for fichier in fichiers:
-              contenu = fichier.read_text(encoding="utf-8")
-              ast.parse(contenu, filename=str(fichier))
+              ast.parse(
+                  fichier.read_text(encoding="utf-8"),
+                  filename=str(fichier),
+              )
               print("SYNTAXE OK :", fichier)
 
-          print("SYNTAXE PYTHON VALIDEE")
+          print("SYNTAXE VALIDEE")
           PY
 
-      - name: Empreinte initiale des archives
+      - name: Enregistrer integrite initiale
         run: |
           set -euo pipefail
 
@@ -107,20 +124,17 @@ jobs:
           from pathlib import Path
 
           root = Path.cwd()
-          proteges = {
+          exclusions = {
+              ".git", ".venv", "venv",
+              "node_modules", "__pycache__",
+              ".pytest_cache",
+          }
+
+          noms = {
               "figes.json",
               "audits.json",
               "courses.json",
               "selections.json",
-          }
-
-          exclusions = {
-              ".git",
-              ".venv",
-              "venv",
-              "node_modules",
-              "__pycache__",
-              ".pytest_cache",
           }
 
           empreintes = {}
@@ -133,14 +147,14 @@ jobs:
               ]
 
               for nom in fichiers:
-                  if nom not in proteges:
+                  if nom not in noms:
                       continue
 
                   chemin = Path(dossier) / nom
 
                   if chemin.is_symlink():
                       raise RuntimeError(
-                          f"Archive symbolique interdite : {chemin}"
+                          f"Lien symbolique interdit : {chemin}"
                       )
 
                   relatif = chemin.relative_to(root).as_posix()
@@ -148,17 +162,15 @@ jobs:
                       chemin.read_bytes()
                   ).hexdigest()
 
-          sortie = Path(os.environ["RUNNER_TEMP"]) / (
+          sortie = Path(os.environ["RUNNER_TEMP"]) / \
               "x1000-archives-initiales.json"
-          )
 
           sortie.write_text(
-              json.dumps(empreintes, sort_keys=True, indent=2),
+              json.dumps(empreintes, sort_keys=True),
               encoding="utf-8",
           )
 
           print("ARCHIVES RECENSEES :", len(empreintes))
-          print("EMPREINTES INITIALES ENREGISTREES")
           PY
 
       - name: Autotests techniques M1-M5
@@ -179,33 +191,29 @@ jobs:
           )
 
           ancien = os.getcwd()
-          ancien_bytecode = sys.dont_write_bytecode
 
           try:
               with tempfile.TemporaryDirectory() as dossier:
                   os.chdir(dossier)
-                  sys.dont_write_bytecode = True
 
                   with protection():
                       modules = charger_moteurs()
 
                       if set(modules) != set(MOTEURS):
                           raise AssertionError(
-                              "Chargement M1-M5 incomplet"
+                              "Chargement incomplet M1-M5"
                           )
 
                       resultats = tester_moteurs(modules)
 
                       if resultats != {}:
                           raise AssertionError(
-                              "Autotests techniques incoherents"
+                              "Autotests incoherents"
                           )
-
           finally:
               os.chdir(ancien)
-              sys.dont_write_bytecode = ancien_bytecode
 
-          print("M1-M5 : AUTOTESTS REUSSIS")
+          print("AUTOTESTS M1-M5 REUSSIS")
           PY
 
       - name: Detecter les courses attestees
@@ -221,7 +229,7 @@ jobs:
 
           if dossier.is_symlink():
               raise RuntimeError(
-                  "Dossier de donnees symbolique interdit"
+                  "Dossier symbolique interdit"
               )
 
           fichiers = sorted(dossier.glob("*.json"))
@@ -241,17 +249,15 @@ jobs:
           ) as sortie:
               sortie.write(f"nombre={nombre}\n")
               sortie.write(
-                  "presentes="
-                  + ("true" if nombre else "false")
-                  + "\n"
+                  f"presentes={str(nombre > 0).lower()}\n"
               )
 
-          if nombre:
-              print("COURSES CANDIDATES :", nombre)
-          else:
+          print("COURSES CANDIDATES :", nombre)
+
+          if not nombre:
               print(
                   "::notice::Aucune course attestee. "
-                  "Succes technique uniquement."
+                  "Validation technique uniquement."
               )
           PY
 
@@ -260,12 +266,9 @@ jobs:
         if: steps.donnees.outputs.presentes == 'true'
         run: |
           set -euo pipefail
-
           python -B tests/valider_donnees_reelles.py
 
-          echo "VALIDATION STRUCTURELLE REUSSIE"
-
-      - name: Analyses fonctionnelles reelles M1-M5
+      - name: Analyses fonctionnelles M1-M5
         id: reel
         if: >-
           ${{
@@ -277,7 +280,6 @@ jobs:
 
           python -B - <<'PY'
           import os
-          import sys
           import tempfile
 
           from tests.test_fonctionnel_reel_m1_m5 import (
@@ -292,90 +294,73 @@ jobs:
           fichiers = sorted(FIXTURES.glob("*.json"))
 
           if not fichiers:
-              raise AssertionError(
-                  "Aucune course attestee disponible"
-              )
+              raise AssertionError("Aucune fixture")
 
           analyses = 0
           ancien = os.getcwd()
-          ancien_bytecode = sys.dont_write_bytecode
 
           try:
               with tempfile.TemporaryDirectory() as dossier:
                   os.chdir(dossier)
-                  sys.dont_write_bytecode = True
 
                   with protection():
                       modules = charger_moteurs()
 
                       if set(modules) != set(MOTEURS):
                           raise AssertionError(
-                              "Modules M1-M5 incomplets"
+                              "Modules incomplets"
                           )
 
                       for fichier in fichiers:
-                          course, actifs = charger_fixture(
-                              fichier
-                          )
+                          course, actifs = charger_fixture(fichier)
 
                           resultats = tester_moteurs(
-                              modules,
-                              course,
-                              actifs,
+                              modules, course, actifs
                           )
 
                           if set(resultats) != set(MOTEURS):
                               raise AssertionError(
-                                  "Resultats moteurs incomplets"
+                                  "Resultats incomplets"
                               )
 
                           for nom in MOTEURS:
                               resultat = resultats[nom]
 
-                              if (
-                                  resultat["statut"]
-                                  != "ANALYSE_DISPONIBLE"
-                              ):
+                              if resultat["statut"] != \
+                                      "ANALYSE_DISPONIBLE":
                                   raise AssertionError(
-                                      f"{nom} : analyse indisponible"
+                                      f"{nom}: analyse indisponible"
                                   )
 
                               numeros = resultat["numeros"]
 
                               if len(numeros) != 5:
                                   raise AssertionError(
-                                      f"{nom} : cinq positions requises"
+                                      f"{nom}: cinq positions requises"
                                   )
 
                               if len(set(numeros)) != 5:
                                   raise AssertionError(
-                                      f"{nom} : doublons"
+                                      f"{nom}: doublons"
                                   )
 
                               if not set(numeros).issubset(actifs):
                                   raise AssertionError(
-                                      f"{nom} : non-partant classe"
+                                      f"{nom}: non-partant classe"
                                   )
 
                               analyses += 1
 
-                          print(
-                              "COURSE VALIDEE :",
-                              course["id"],
-                          )
-
+                          print("COURSE VALIDEE :", course["id"])
           finally:
               os.chdir(ancien)
-              sys.dont_write_bytecode = ancien_bytecode
 
           attendu = len(fichiers) * len(MOTEURS)
 
           if analyses != attendu:
               raise AssertionError(
-                  f"Analyses : {analyses}/{attendu}"
+                  f"Analyses incompletes : {analyses}/{attendu}"
               )
-
-          print("ANALYSES REUSSIES :", analyses)
 
           with open(
               os.environ["GITHUB_OUTPUT"],
@@ -383,9 +368,11 @@ jobs:
               encoding="utf-8",
           ) as sortie:
               sortie.write(f"analyses={analyses}\n")
+
+          print("ANALYSES REUSSIES :", analyses)
           PY
 
-      - name: Verifier integrite des archives
+      - name: Verifier archives inchangees
         id: archives
         if: always()
         run: |
@@ -398,25 +385,8 @@ jobs:
           from pathlib import Path
 
           root = Path.cwd()
-          noms = {
-              "figes.json",
-              "audits.json",
-              "courses.json",
-              "selections.json",
-          }
-
-          exclusions = {
-              ".git",
-              ".venv",
-              "venv",
-              "node_modules",
-              "__pycache__",
-              ".pytest_cache",
-          }
-
-          initial = Path(os.environ["RUNNER_TEMP"]) / (
+          initial = Path(os.environ["RUNNER_TEMP"]) / \
               "x1000-archives-initiales.json"
-          )
 
           if not initial.is_file():
               raise RuntimeError(
@@ -426,6 +396,19 @@ jobs:
           avant = json.loads(
               initial.read_text(encoding="utf-8")
           )
+
+          noms = {
+              "figes.json",
+              "audits.json",
+              "courses.json",
+              "selections.json",
+          }
+
+          exclusions = {
+              ".git", ".venv", "venv",
+              "node_modules", "__pycache__",
+              ".pytest_cache",
+          }
 
           apres = {}
 
@@ -444,28 +427,18 @@ jobs:
 
                   if chemin.is_symlink():
                       raise RuntimeError(
-                          f"Archive symbolique interdite : {chemin}"
+                          f"Archive symbolique : {chemin}"
                       )
 
                   relatif = chemin.relative_to(root).as_posix()
+
                   apres[relatif] = hashlib.sha256(
                       chemin.read_bytes()
                   ).hexdigest()
 
           if avant != apres:
-              ajoutes = sorted(apres.keys() - avant.keys())
-              supprimes = sorted(avant.keys() - apres.keys())
-              modifies = sorted(
-                  chemin
-                  for chemin in avant.keys() & apres.keys()
-                  if avant[chemin] != apres[chemin]
-              )
-
               raise AssertionError(
-                  "Archives modifiees : "
-                  f"ajouts={ajoutes}, "
-                  f"suppressions={supprimes}, "
-                  f"modifications={modifies}"
+                  "INTEGRITE ARCHIVES COMPROMISE"
               )
 
           print("ARCHIVES INCHANGEES")
@@ -480,9 +453,7 @@ jobs:
           git diff --exit-code
           git diff --cached --exit-code
 
-          fichiers="$(
-            git ls-files --others --exclude-standard
-          )"
+          fichiers="$(git ls-files --others --exclude-standard)"
 
           if [[ -n "$fichiers" ]]; then
             printf '%s\n' "$fichiers"
@@ -509,9 +480,9 @@ jobs:
             echo ""
             echo "| Controle | Resultat |"
             echo "|---|---|"
-            echo "| Autotests M1-M5 | $TECHNIQUE |"
+            echo "| Autotests | $TECHNIQUE |"
             echo "| Courses candidates | ${NOMBRE:-0} |"
-            echo "| Validation des courses | $VALIDATION |"
+            echo "| Validation | $VALIDATION |"
             echo "| Analyses reelles | $REEL |"
             echo "| Nombre d'analyses | ${ANALYSES:-0} |"
             echo "| Archives | $ARCHIVES |"
@@ -519,27 +490,26 @@ jobs:
             echo ""
 
             if [[ "$PRESENTES" != "true" ]]; then
-              echo "Tests reels non executes."
               echo "Validation technique uniquement."
             elif [[ "$REEL" == "success" ]]; then
-              echo "Tests fonctionnels reels reussis."
+              echo "Analyses fonctionnelles reussies."
               echo "Sources externes non verifiees en ligne."
             else
-              echo "Tests fonctionnels reels non valides."
+              echo "Analyses fonctionnelles non validees."
             fi
 
             echo ""
             echo "- Aucun FIGE automatique"
-            echo "- Aucune publication automatique"
             echo "- Aucun deploiement"
+            echo "- Aucune publication"
             echo "- Aucune collecte PMU"
-            echo "- Archives controlees par SHA-256"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Statut final
         if: always()
         env:
           TECHNIQUE: ${{ steps.technique.outcome }}
+          DONNEES: ${{ steps.donnees.outcome }}
           PRESENTES: ${{ steps.donnees.outputs.presentes }}
           VALIDATION: ${{ steps.validation.outcome }}
           REEL: ${{ steps.reel.outcome }}
@@ -549,16 +519,17 @@ jobs:
           set -euo pipefail
 
           test "$TECHNIQUE" = "success"
+          test "$DONNEES" = "success"
           test "$ARCHIVES" = "success"
           test "$INTEGRITE" = "success"
 
           if [[ "$PRESENTES" == "true" ]]; then
             test "$VALIDATION" = "success"
             test "$REEL" = "success"
-            echo "X1000 : TESTS REELS VALIDES"
+            echo "TESTS FONCTIONNELS VALIDES"
           else
-            echo "::notice::Tests techniques valides"
             echo "::notice::Tests reels non executes"
+            echo "AUTOTESTS TECHNIQUES VALIDES"
           fi
 
           echo "CONTROLES X1000 TERMINES"
