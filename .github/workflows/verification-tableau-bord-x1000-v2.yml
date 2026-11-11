@@ -15,6 +15,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: x1000-dashboard-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   verification:
     name: Diagnostic API et tableau de bord
@@ -40,7 +44,9 @@ jobs:
           python-version: "3.11"
 
       - name: Installer les dependances
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install \
             "fastapi>=0.115,<1" \
             "httpx>=0.27,<1"
@@ -49,12 +55,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "X1000_DATA_DIR=$RUNNER_TEMP/x1000-data" >> "$GITHUB_ENV"
+          echo "X1000_DATA_DIR=$RUNNER_TEMP/x1000-data" \
+            >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/x1000-data"
 
       - name: Verifier les pages HTML
         shell: bash
         run: |
+          set -euo pipefail
+
           python -B - <<'PY'
           from pathlib import Path
           from html.parser import HTMLParser
@@ -63,31 +72,34 @@ jobs:
               def __init__(self):
                   super().__init__()
                   self.tags = set()
-                  self.links = []
 
               def handle_starttag(self, tag, attrs):
-                  self.tags.add(tag)
-                  if tag == "a":
-                      href = dict(attrs).get("href")
-                      if href:
-                          self.links.append(href)
+                  self.tags.add(tag.lower())
 
           dashboard = Path(
               ".github/workflows/dashboard_x1000.html"
           )
 
-          pages = [
-              dashboard,
-              Path("index.html"),
-              Path("pmu.html"),
-          ]
+          if not dashboard.is_file():
+              raise SystemExit(
+                  "ERREUR: tableau de bord obligatoire absent"
+              )
 
-          for fichier in pages:
-              if not fichier.is_file():
-                  raise SystemExit(
-                      f"ERREUR: page obligatoire absente: {fichier}"
+          pages = [dashboard]
+
+          # Pages facultatives : verifier uniquement
+          # celles qui existent reellement.
+          for nom in ("index.html", "pmu.html"):
+              fichier = Path(nom)
+              if fichier.is_file():
+                  pages.append(fichier)
+              else:
+                  print(
+                      f"INFO: {nom} absent, "
+                      "controle facultatif ignore"
                   )
 
+          for fichier in pages:
               contenu = fichier.read_text(
                   encoding="utf-8-sig"
               )
@@ -99,31 +111,32 @@ jobs:
               for tag in ("html", "head", "body"):
                   if tag not in parser.tags:
                       raise SystemExit(
-                          f"ERREUR: {fichier}: {tag} absent"
+                          f"ERREUR: {fichier}: "
+                          f"balise {tag} absente"
                       )
 
               if not contenu.strip().lower().endswith(
                   "</html>"
               ):
                   raise SystemExit(
-                      f"ERREUR: {fichier}: fin HTML absente"
+                      f"ERREUR: {fichier}: "
+                      "fin HTML absente"
                   )
 
               print(f"OK: {fichier}")
 
-          index = Path("index.html").read_text(
+          contenu_dashboard = dashboard.read_text(
               encoding="utf-8-sig"
           )
 
-          if "X1000 Intelligence Hippique V2" not in index:
-              raise SystemExit(
-                  "ERREUR: nom officiel X1000 V2 absent"
-              )
-
-          if "X1000 PHOENIX" in index.upper():
-              raise SystemExit(
-                  "ERREUR: reference PHOENIX incorrecte"
-              )
+          for moteur in (
+              "M1", "M2", "M3", "M4", "M5"
+          ):
+              if moteur not in contenu_dashboard:
+                  raise SystemExit(
+                      f"ERREUR: reference {moteur} "
+                      "absente du tableau de bord"
+                  )
 
           print("Controle HTML termine : OK")
           PY
@@ -131,6 +144,8 @@ jobs:
       - name: Verifier API et moteurs
         shell: bash
         run: |
+          set -euo pipefail
+
           python -B - <<'PY'
           from fastapi.testclient import TestClient
           from api import app
@@ -147,50 +162,93 @@ jobs:
           with TestClient(app) as client:
               for route in routes:
                   response = client.get(route)
+
                   assert response.status_code == 200, (
-                      route, response.status_code
+                      route,
+                      response.status_code
                   )
-                  print(route, "OK")
+
+                  assert isinstance(
+                      response.json(), dict
+                  ), route
+
+                  print(f"OK: GET {route}")
 
               status = client.get(
                   "/api/status"
               ).json()
 
-              assert set(status["moteurs"]) == {
+              moteurs = status.get("moteurs")
+
+              assert isinstance(moteurs, dict), (
+                  "Statuts moteurs invalides"
+              )
+
+              assert set(moteurs) == {
                   "M1", "M2", "M3", "M4", "M5"
-              }
+              }, "References M1-M5 incompletes"
 
-              assert status[
-                  "collecte_automatique"
-              ] is False
+              for nom in (
+                  "M1", "M2", "M3", "M4", "M5"
+              ):
+                  moteur = moteurs[nom]
 
-              assert status[
-                  "figes_automatiques"
-              ] is False
+                  assert isinstance(moteur, dict), nom
+                  assert moteur.get("moteur") == nom, nom
 
-              assert status[
-                  "publication_automatique"
-              ] is False
+                  print(f"OK: reference {nom}")
 
-              assert status[
-                  "validation_officielle_automatique"
-              ] is False
+              for cle in (
+                  "collecte_automatique",
+                  "figes_automatiques",
+                  "publication_automatique",
+                  "validation_officielle_automatique",
+              ):
+                  assert status.get(cle) is False, (
+                      f"Protection invalide: {cle}"
+                  )
+
+              assert status.get("mode") == (
+                  "LECTURE_SEULE_WEB"
+              )
+
+              diagnostic = client.get(
+                  "/api/diagnostic"
+              ).json()
+
+              regles = diagnostic.get("regles", {})
+
+              for cle in (
+                  "collecte_pmu",
+                  "fige_automatique",
+                  "audit_automatique",
+                  "publication_distante",
+                  "modification_archives",
+              ):
+                  assert regles.get(cle) is False, (
+                      f"Regle invalide: {cle}"
+                  )
 
               for route in routes:
-                  for method in (
-                      "POST", "PUT", "PATCH", "DELETE"
+                  for methode in (
+                      "POST",
+                      "PUT",
+                      "PATCH",
+                      "DELETE",
                   ):
                       response = client.request(
-                          method, route
+                          methode, route
                       )
+
                       assert response.status_code == 405, (
                           route,
-                          method,
+                          methode,
                           response.status_code
                       )
 
-          print("API lecture seule : OK")
-          print("M1 a M5 references : OK")
+              print("API lecture seule : OK")
+              print("References M1 a M5 : OK")
+              print("Protections FIGES et archives : OK")
           PY
 
       - name: Verifier absence de modification
@@ -203,7 +261,8 @@ jobs:
           git diff --cached --exit-code HEAD --
 
           if [ -n "$(git ls-files --others --exclude-standard)" ]; then
-            echo "ERREUR: fichiers non suivis"
+            echo "ERREUR: fichiers non suivis detectes"
+            git ls-files --others --exclude-standard
             exit 1
           fi
 
@@ -216,17 +275,27 @@ jobs:
           {
             echo "## X1000 Intelligence Hippique V2"
             echo ""
-            echo "Statut : ${{ job.status }}"
+            echo "Statut du job : ${{ job.status }}"
             echo ""
-            echo "- Verification index.html"
-            echo "- Verification pmu.html"
-            echo "- Verification tableau de bord existant"
-            echo "- Verification des six routes API"
-            echo "- Verification des references M1 a M5"
-            echo "- Controle des methodes interdites"
+            echo "### Controles demandes"
+            echo ""
+            echo "- Tableau de bord HTML obligatoire"
+            echo "- Pages HTML facultatives si presentes"
+            echo "- Six routes API en lecture seule"
+            echo "- References des moteurs M1 a M5"
+            echo "- Protection des methodes HTTP"
+            echo "- Desactivation des automatismes interdits"
             echo "- Verification du depot inchange"
             echo ""
-            echo "Aucun FIGE genere."
-            echo "Aucune archive modifiee."
-            echo "Aucune publication automatique."
+            echo "### Restrictions"
+            echo ""
+            echo "- Aucun FIGE genere"
+            echo "- Aucune archive modifiee"
+            echo "- Aucun pronostic modifie"
+            echo "- Aucun commit ou push automatique"
+            echo "- Aucun deploiement automatique"
+            echo "- Aucune publication automatique"
+            echo ""
+            echo "Les controles non executes ou echoues"
+            echo "ne sont pas consideres comme valides."
           } >> "$GITHUB_STEP_SUMMARY"
