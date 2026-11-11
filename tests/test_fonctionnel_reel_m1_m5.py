@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
-"""X1000 PHOENIX - Diagnostic controle M1-M5, sans reseau."""
+"""
+X1000 PHOENIX - Diagnostic controle M1-M5.
+
+Objectifs :
+- Controle de la branche autorisee.
+- Autotests independants M1 a M5.
+- Verification des fixtures de courses reelles.
+- Controle des classements et non-partants.
+- Protection contre les ecritures courantes.
+- Blocage des connexions reseau Python.
+- Aucun FIGE, aucune publication.
+- Aucune modification des archives.
+- Compatibilite Pytest et GitHub Actions.
+"""
 
 import builtins
 import copy
@@ -11,13 +24,20 @@ import socket
 import subprocess
 import sys
 import tempfile
-from contextlib import contextmanager
+
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+
 ROOT = Path(__file__).resolve().parents[1]
+
 BRANCH = "fix/x1000-v2-reparation-controlee"
+
+DEPOT = "x1000-intelligence-hippique-v2"
+
 MOTEURS = ("M1", "M2", "M3", "M4", "M5")
+
 FIXTURES = ROOT / "tests" / "donnees_reelles"
 
 sys.path.insert(0, str(ROOT))
@@ -29,48 +49,102 @@ def exiger(condition, message):
 
 
 def verifier_branche():
+    """Verifie le depot et la branche de travail."""
+
+    exiger(
+        ROOT.name == DEPOT,
+        "Depot incorrect : " + ROOT.name
+    )
+
     commande = subprocess.run(
-        ["git", "-C", str(ROOT),
-         "branch", "--show-current"],
+        [
+            "git",
+            "-C",
+            str(ROOT),
+            "branch",
+            "--show-current",
+        ],
         capture_output=True,
         text=True,
         check=True,
         timeout=10,
     )
-    branche = commande.stdout.strip()
+
+    branche_locale = commande.stdout.strip()
+
+    # GitHub Actions utilise souvent un HEAD detache.
+    branche_ci = (
+        os.getenv("GITHUB_HEAD_REF")
+        or os.getenv("GITHUB_REF_NAME")
+        or ""
+    )
+
+    if branche_locale:
+        branche = branche_locale
+    elif os.getenv("GITHUB_ACTIONS") == "true":
+        branche = branche_ci
+    else:
+        branche = ""
+
     exiger(
         branche == BRANCH,
         "Branche incorrecte : " + repr(branche)
     )
 
+    print("DEPOT :", DEPOT)
+    print("BRANCHE :", branche)
+
 
 @contextmanager
 def protection():
-    """Bloque les ecritures courantes et le reseau Python."""
+    """
+    Bloque les ecritures courantes et les connexions
+    reseau Python pendant le diagnostic.
+
+    Ce mecanisme n'est pas un bac a sable complet.
+    """
+
     original_open = builtins.open
     original_os_open = os.open
 
     def open_protege(file, mode="r", *args, **kwargs):
         if any(c in str(mode) for c in "wax+"):
-            raise PermissionError("Ecriture interdite")
-        return original_open(file, mode, *args, **kwargs)
+            raise PermissionError(
+                "X1000 : ecriture interdite"
+            )
+
+        return original_open(
+            file, mode, *args, **kwargs
+        )
 
     def os_open_protege(file, flags, *args, **kwargs):
         interdits = (
-            os.O_WRONLY | os.O_RDWR | os.O_CREAT
-            | os.O_TRUNC | os.O_APPEND
+            os.O_WRONLY
+            | os.O_RDWR
+            | os.O_CREAT
+            | os.O_TRUNC
+            | os.O_APPEND
         )
+
         if flags & interdits:
-            raise PermissionError("Ecriture interdite")
-        return original_os_open(file, flags, *args, **kwargs)
+            raise PermissionError(
+                "X1000 : ecriture OS interdite"
+            )
+
+        return original_os_open(
+            file, flags, *args, **kwargs
+        )
 
     def interdit(*args, **kwargs):
-        raise PermissionError("Operation interdite")
+        raise PermissionError(
+            "X1000 : operation interdite"
+        )
 
     protections = [
         patch("builtins.open", open_protege),
         patch("io.open", open_protege),
         patch("os.open", os_open_protege),
+
         patch("socket.socket.connect", interdit),
         patch("socket.socket.connect_ex", interdit),
         patch("socket.socket.bind", interdit),
@@ -78,6 +152,7 @@ def protection():
         patch("socket.socket.sendto", interdit),
         patch("socket.create_connection", interdit),
         patch("socket.getaddrinfo", interdit),
+
         patch("os.remove", interdit),
         patch("os.unlink", interdit),
         patch("os.rename", interdit),
@@ -88,43 +163,56 @@ def protection():
         patch("os.chmod", interdit),
         patch("os.chown", interdit),
         patch("os.truncate", interdit),
+
         patch("shutil.rmtree", interdit),
         patch("shutil.move", interdit),
         patch("shutil.copy", interdit),
         patch("shutil.copy2", interdit),
         patch("shutil.copyfile", interdit),
+
         patch("subprocess.Popen", interdit),
         patch("os.system", interdit),
         patch("os.popen", interdit),
     ]
 
-    from contextlib import ExitStack
-
     with ExitStack() as pile:
         for element in protections:
             pile.enter_context(element)
+
         yield
 
 
 def charger_fixture(chemin):
+    """Charge et controle une fixture attestee."""
+
     exiger(
-        chemin.is_file() and not chemin.is_symlink(),
+        chemin.is_file()
+        and not chemin.is_symlink(),
         "Fixture absente ou lien symbolique"
     )
 
-    with chemin.open("r", encoding="utf-8") as fichier:
+    with chemin.open(
+        "r", encoding="utf-8"
+    ) as fichier:
         donnees = json.load(fichier)
 
-    exiger(isinstance(donnees, dict),
-           "Fixture invalide")
+    exiger(
+        isinstance(donnees, dict),
+        "Fixture invalide"
+    )
 
     preuve = donnees.get("preuve")
     course = donnees.get("course")
 
-    exiger(isinstance(preuve, dict),
-           "Preuve absente")
-    exiger(isinstance(course, dict),
-           "Course absente")
+    exiger(
+        isinstance(preuve, dict),
+        "Preuve absente"
+    )
+
+    exiger(
+        isinstance(course, dict),
+        "Course absente"
+    )
 
     for champ in (
         "source_url",
@@ -132,8 +220,10 @@ def charger_fixture(chemin):
         "date_verification",
     ):
         valeur = preuve.get(champ)
+
         exiger(
-            isinstance(valeur, str) and valeur.strip(),
+            isinstance(valeur, str)
+            and bool(valeur.strip()),
             "Preuve incomplete : " + champ
         )
 
@@ -141,22 +231,29 @@ def charger_fixture(chemin):
         preuve["source_url"].startswith("https://"),
         "Source HTTPS obligatoire"
     )
+
     exiger(
         preuve.get("verification_humaine") is True,
         "Attestation humaine absente"
     )
+
     exiger(
-        course.get("localisation_france_verifiee") is True,
+        course.get(
+            "localisation_france_verifiee"
+        ) is True,
         "Localisation France non attestee"
     )
+
     exiger(
         course.get("depart_verifie") is True,
         "Depart non atteste"
     )
 
     partants = course.get("partants")
+
     exiger(
-        isinstance(partants, list) and partants,
+        isinstance(partants, list)
+        and bool(partants),
         "Liste des partants absente"
     )
 
@@ -164,20 +261,25 @@ def charger_fixture(chemin):
     actifs = set()
 
     for cheval in partants:
-        exiger(isinstance(cheval, dict),
-               "Partant invalide")
+        exiger(
+            isinstance(cheval, dict),
+            "Partant invalide"
+        )
 
         numero = cheval.get("numero")
 
         exiger(
-            type(numero) is int and numero > 0,
+            type(numero) is int
+            and numero > 0,
             "Numero invalide"
         )
+
         exiger(
             isinstance(cheval.get("nom"), str)
-            and cheval["nom"].strip(),
+            and bool(cheval["nom"].strip()),
             "Nom manquant"
         )
+
         exiger(
             type(cheval.get("non_partant")) is bool,
             "Statut non-partant absent"
@@ -192,6 +294,7 @@ def charger_fixture(chemin):
         len(numeros) == len(set(numeros)),
         "Numeros en double"
     )
+
     exiger(
         len(actifs) >= 5,
         "Moins de cinq partants actifs"
@@ -201,73 +304,113 @@ def charger_fixture(chemin):
 
 
 def verifier_sortie(sortie, moteur, actifs):
-    exiger(isinstance(sortie, dict),
-           moteur + " : sortie invalide")
-    exiger(sortie.get("moteur") == moteur,
-           moteur + " : identite incorrecte")
-    exiger(sortie.get("fige") is False,
-           moteur + " : FIGE interdit")
-    exiger(sortie.get("publication") is False,
-           moteur + " : publication interdite")
+    """Controle la sortie sans changer le pronostic."""
+
+    exiger(
+        isinstance(sortie, dict),
+        moteur + " : sortie invalide"
+    )
+
+    exiger(
+        sortie.get("moteur") == moteur,
+        moteur + " : identite incorrecte"
+    )
+
+    exiger(
+        sortie.get("fige") is False,
+        moteur + " : FIGE interdit"
+    )
+
+    exiger(
+        sortie.get("publication") is False,
+        moteur + " : publication interdite"
+    )
 
     statut = sortie.get("statut")
 
+    statuts_autorises = (
+        "ANALYSE_DISPONIBLE",
+        "DONNEES_INSUFFISANTES",
+        "NON_ANALYSABLE",
+    )
+
     exiger(
-        statut in (
-            "ANALYSE_DISPONIBLE",
-            "DONNEES_INSUFFISANTES",
-            "NON_ANALYSABLE",
-        ),
+        statut in statuts_autorises,
         moteur + " : statut invalide"
     )
 
     classement = sortie.get("classement", [])
     partiel = sortie.get("classement_partiel", [])
 
-    exiger(isinstance(classement, list),
-           "Classement invalide")
-    exiger(isinstance(partiel, list),
-           "Classement partiel invalide")
+    exiger(
+        isinstance(classement, list),
+        moteur + " : classement invalide"
+    )
+
+    exiger(
+        isinstance(partiel, list),
+        moteur + " : classement partiel invalide"
+    )
 
     numeros = []
 
     for cheval in classement + partiel:
-        exiger(isinstance(cheval, dict),
-               "Position invalide")
+        exiger(
+            isinstance(cheval, dict),
+            moteur + " : position invalide"
+        )
 
         numero = cheval.get("numero")
 
-        exiger(type(numero) is int,
-               "Numero invalide")
-        exiger(numero in actifs,
-               "Cheval inconnu ou non-partant")
+        exiger(
+            type(numero) is int,
+            moteur + " : numero invalide"
+        )
+
+        exiger(
+            numero in actifs,
+            moteur + " : cheval inconnu ou non-partant"
+        )
 
         numeros.append(numero)
 
     exiger(
         len(numeros) == len(set(numeros)),
-        "Doublon de classement"
+        moteur + " : doublon de classement"
     )
-    exiger(len(classement) <= 5,
-           "Plus de cinq positions")
-    exiger(len(partiel) <= 5,
-           "Classement partiel trop long")
+
+    exiger(
+        len(classement) <= 5,
+        moteur + " : plus de cinq positions"
+    )
+
+    exiger(
+        len(partiel) <= 5,
+        moteur + " : classement partiel trop long"
+    )
 
     if statut == "ANALYSE_DISPONIBLE":
         exiger(
             len(classement) == 5,
-            "Cinq positions attendues"
+            moteur + " : cinq positions attendues"
+        )
+
+        exiger(
+            not partiel,
+            moteur + " : classement partiel inattendu"
         )
     else:
         exiger(
             not classement,
-            "Classement complet non justifie"
+            moteur + " : classement complet non justifie"
         )
 
     return statut, numeros
 
 
 def charger_moteurs():
+    """Charge les cinq moteurs independamment."""
+
     modules = {}
 
     for nom in MOTEURS:
@@ -280,12 +423,24 @@ def charger_moteurs():
             nom + " : identite incorrecte"
         )
 
+        for fonction in (
+            "verifier_noyau",
+            "self_test",
+            "analyser_course",
+        ):
+            exiger(
+                callable(getattr(module, fonction, None)),
+                nom + " : fonction absente : " + fonction
+            )
+
         modules[nom] = module
 
     return modules
 
 
 def tester_moteurs(modules, course=None, actifs=None):
+    """Execute les controles M1-M5."""
+
     resultats = {}
 
     for nom, module in modules.items():
@@ -310,7 +465,23 @@ def tester_moteurs(modules, course=None, actifs=None):
             nom + " : entree modifiee"
         )
 
-        module.noyau_commun.verifier_sortie_analyse(
+        noyau = getattr(
+            module, "noyau_commun", None
+        )
+
+        exiger(
+            noyau is not None
+            and callable(
+                getattr(
+                    noyau,
+                    "verifier_sortie_analyse",
+                    None,
+                )
+            ),
+            nom + " : validateur commun absent"
+        )
+
+        noyau.verifier_sortie_analyse(
             sortie, course
         )
 
@@ -323,12 +494,26 @@ def tester_moteurs(modules, course=None, actifs=None):
             "numeros": numeros,
         }
 
-        print(nom, "-", statut, numeros)
+        print(
+            nom,
+            "-",
+            statut,
+            numeros,
+        )
 
     return resultats
 
 
+# CORRECTION PYTEST :
+# Cette fonction est un utilitaire interne.
+# Pytest ne doit pas la collecter comme un test.
+# Evite : fixture 'modules' not found.
+tester_moteurs.__test__ = False
+
+
 def main():
+    """Lance le diagnostic controle."""
+
     for variable in (
         "X1000_READ_ONLY",
         "X1000_NO_FIGE",
@@ -342,46 +527,56 @@ def main():
     verifier_branche()
 
     ancien_dossier = Path.cwd()
+    ancien_bytecode = sys.dont_write_bytecode
 
-    # Repertoire temporaire cree avant protection.
+    # Le dossier temporaire est cree avant
+    # l'activation des protections.
     with tempfile.TemporaryDirectory() as dossier:
         try:
             os.chdir(dossier)
 
-            # Desactive les .pyc dans ce processus.
             sys.dont_write_bytecode = True
 
             with protection():
                 modules = charger_moteurs()
+
                 tester_moteurs(modules)
 
                 fichiers = (
                     sorted(FIXTURES.glob("*.json"))
-                    if FIXTURES.is_dir() else []
+                    if FIXTURES.is_dir()
+                    else []
                 )
 
                 if not fichiers:
                     print(
                         "COURSES REELLES : NON TESTEES"
                     )
+
                     print(
                         "Aucune fixture attestee disponible"
                     )
+
                     print(
-                        "AUTOTESTS TERMINES - "
+                        "AUTOTESTS OK - "
                         "VALIDATION REELLE INCOMPLETE"
                     )
+
                     return 0
 
                 for fichier in fichiers:
-                    print("COURSE :", fichier.name)
+                    print(
+                        "COURSE :", fichier.name
+                    )
 
                     course, actifs = charger_fixture(
                         fichier
                     )
 
                     resultats = tester_moteurs(
-                        modules, course, actifs
+                        modules,
+                        course,
+                        actifs,
                     )
 
                     exiger(
@@ -389,8 +584,14 @@ def main():
                         "Resultats moteurs incomplets"
                     )
 
-                print("DIAGNOSTIC M1-M5 TERMINE")
-                print("AUCUN FIGE - AUCUNE PUBLICATION")
+                print(
+                    "DIAGNOSTIC M1-M5 TERMINE"
+                )
+
+                print(
+                    "AUCUN FIGE - AUCUNE PUBLICATION"
+                )
+
                 print(
                     "Sources et attestations a "
                     "verifier independamment"
@@ -398,13 +599,20 @@ def main():
 
         finally:
             os.chdir(ancien_dossier)
+            sys.dont_write_bytecode = ancien_bytecode
 
     return 0
+
+
+# Empêche egalement la collecte du point d'entree
+# comme test par des configurations Pytest larges.
+main.__test__ = False
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
+
     except Exception as erreur:
         print(
             "ECHEC X1000 :",
@@ -412,4 +620,5 @@ if __name__ == "__main__":
             str(erreur),
             file=sys.stderr,
         )
+
         sys.exit(1)
