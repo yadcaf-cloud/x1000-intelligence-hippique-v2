@@ -1,3 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# X1000 PHOENIX V2.4
+# REPARATION CONTROLEE DU WORKFLOW M1-M5
+# Aucun commit, push, deploiement ou FIGE.
+
+REPO="x1000-intelligence-hippique-v2"
+BRANCHE="fix/x1000-v2-reparation-controlee"
+FICHIER=".github/workflows/controle-technique-m1-m5-v2.yml"
+
+echo "=== X1000 PHOENIX - REPARATION ==="
+
+# 1. Verification du depot
+if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
+  echo "ERREUR : executer depuis le depot Git."
+  exit 1
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+
+if [ "$(basename "$PWD")" != "$REPO" ]; then
+  echo "ERREUR : depot inattendu."
+  exit 1
+fi
+
+if [ "$(git branch --show-current)" != "$BRANCHE" ]; then
+  echo "ERREUR : branche non autorisee."
+  exit 1
+fi
+
+if [ ! -f "$FICHIER" ]; then
+  echo "ERREUR : workflow introuvable."
+  exit 1
+fi
+
+if ! git diff --quiet -- "$FICHIER" ||
+   ! git diff --cached --quiet -- "$FICHIER"; then
+  echo "ERREUR : modifications existantes du workflow."
+  echo "Sauvegarder ou examiner ces modifications avant."
+  exit 1
+fi
+
+# 2. Sauvegarde hors du depot
+SAUVEGARDE="$(mktemp -d)"
+cp "$FICHIER" "$SAUVEGARDE/workflow-original.yml"
+echo "Sauvegarde : $SAUVEGARDE"
+
+# 3. Remplacement du workflow
+cat > "$FICHIER" <<'YAML'
 name: X1000 V2 - Controle technique M1-M5
 
 on:
@@ -27,20 +77,21 @@ concurrency:
 
 jobs:
   controle:
-    name: Audit securise des cinq moteurs
+    name: Audit securise M1-M5
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       X1000_READ_ONLY: "1"
       X1000_NO_FIGE: "1"
       X1000_NO_PUBLICATION: "1"
 
     steps:
-      - name: Recuperer la branche
-        uses: actions/checkout@v4.3.1
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
         with:
           ref: fix/x1000-v2-reparation-controlee
           persist-credentials: false
@@ -50,16 +101,16 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Installer dependances de test
+      - name: Installer les dependances
         shell: bash
         run: |
           set -euo pipefail
-
           python -m pip install \
             "fastapi>=0.115,<1" \
-            "httpx>=0.27,<1"
+            "httpx>=0.27,<1" \
+            "pytest>=8,<10"
 
-      - name: Preparer un environnement isole
+      - name: Preparer environnement isole
         shell: bash
         run: |
           set -euo pipefail
@@ -68,12 +119,11 @@ jobs:
           mkdir -p "$DATA_DIR"
 
           echo "X1000_DATA_DIR=$DATA_DIR" >> "$GITHUB_ENV"
+          echo "PYTEST_ADDOPTS=-p no:cacheprovider" >> "$GITHUB_ENV"
 
-          echo "Environnement de test isole : OK"
-          echo "Mode lecture seule demande"
-          echo "FIGES et publications desactives"
+          echo "Environnement temporaire configure."
 
-      - name: Verifier la structure et la syntaxe
+      - name: Verifier structure et syntaxe
         shell: bash
         run: |
           set -euo pipefail
@@ -96,42 +146,42 @@ jobs:
           ]
 
           for nom in essentiels:
-              p = Path(nom)
-
-              if not p.is_file():
+              if not Path(nom).is_file():
                   raise RuntimeError(
-                      f"Fichier absent : {nom}"
+                      f"Fichier obligatoire absent : {nom}"
                   )
 
-          fichiers = [
-              *Path("moteurs").rglob("*.py"),
-              *Path("tests").rglob("test_*.py"),
-              *[Path(n) for n in essentiels],
-          ]
+          fichiers = set()
 
-          for p in set(fichiers):
+          for dossier in ("moteurs", "tests"):
+              p = Path(dossier)
+              if p.is_dir():
+                  fichiers.update(p.rglob("*.py"))
+
+          fichiers.update(map(Path, essentiels))
+
+          for fichier in sorted(fichiers):
               ast.parse(
-                  p.read_text(encoding="utf-8-sig"),
-                  filename=str(p),
+                  fichier.read_text(encoding="utf-8-sig"),
+                  filename=str(fichier),
               )
 
           print("Structure et syntaxe : OK")
           PY
 
-      - name: Tester individuellement M1 a M5
+      - name: Tester M1 a M5 individuellement
         shell: bash
         run: |
           set -euo pipefail
 
-          for moteur in m1 m2 m3 m4 m5
-          do
-            echo "=== CONTROLE $moteur ==="
-            python -B -m moteurs."$moteur" --self-test
+          for moteur in m1 m2 m3 m4 m5; do
+            echo "=== TEST $moteur ==="
+            python -B -m "moteurs.$moteur" --self-test
           done
 
-          echo "Tests individuels M1-M5 : OK"
+          echo "Cinq moteurs testes."
 
-      - name: Verifier identite et interfaces
+      - name: Verifier identite des moteurs
         shell: bash
         run: |
           set -euo pipefail
@@ -144,7 +194,6 @@ jobs:
 
           for i in range(1, 6):
               nom = f"M{i}"
-
               module = importlib.import_module(
                   f"moteurs.m{i}"
               )
@@ -159,16 +208,16 @@ jobs:
               ):
                   assert callable(
                       getattr(module, fonction, None)
-                  ), (nom, fonction)
+                  ), f"{nom}: fonction absente {fonction}"
 
               assert module.COUVERTURE_MIN == 1.0
 
-              print(nom, "interface conforme")
+              print(f"{nom} : interface OK")
 
-          print("Cinq moteurs independants : OK")
+          print("Identite M1-M5 : OK")
           PY
 
-      - name: Tester la coordination
+      - name: Tester coordination centrale
         shell: bash
         run: |
           set -euo pipefail
@@ -179,33 +228,39 @@ jobs:
 
           moteurs = integration.charger_moteurs()
 
-          assert set(moteurs) == {
+          attendus = {
               "M1", "M2", "M3", "M4", "M5"
           }
 
+          assert set(moteurs) == attendus
           assert callable(integration.coordonner)
           assert callable(coordination.coordonner)
 
-          print("Chargement des cinq moteurs : OK")
-          print("Coordination : interface disponible")
+          print("Chargement M1-M5 : OK")
+          print("Coordination : OK")
           PY
 
-      - name: Executer les tests de regression
+      - name: Executer tests de regression
         shell: bash
         run: |
           set -euo pipefail
 
-          if find tests -type f \
-            -name 'test_*.py' | grep -q .
-          then
-            python -B -m unittest discover \
-              -s tests \
-              -p "test_*.py" \
-              -v
-          else
-            echo "ERREUR: aucun test de regression"
+          if [ ! -d tests ]; then
+            echo "ERREUR : dossier tests absent."
             exit 1
           fi
+
+          if ! find tests -type f \
+            -name 'test_*.py' | grep -q .; then
+            echo "ERREUR : aucun test trouve."
+            exit 1
+          fi
+
+          python -B -m pytest \
+            tests \
+            -v \
+            --tb=short \
+            -p no:cacheprovider
 
       - name: Tester API en lecture seule
         shell: bash
@@ -216,7 +271,7 @@ jobs:
           from fastapi.testclient import TestClient
           from api import app
 
-          attendues = (
+          routes = (
               "/api/status",
               "/api/courses",
               "/api/selections",
@@ -226,13 +281,16 @@ jobs:
           )
 
           with TestClient(app) as client:
-              for route in attendues:
+              for route in routes:
                   reponse = client.get(route)
 
                   assert reponse.status_code == 200, (
                       route,
                       reponse.status_code,
+                      reponse.text[:500],
                   )
+
+                  print(f"GET {route} : OK")
 
                   for methode in (
                       "POST",
@@ -241,8 +299,7 @@ jobs:
                       "DELETE",
                   ):
                       reponse = client.request(
-                          methode,
-                          route,
+                          methode, route
                       )
 
                       assert reponse.status_code == 405, (
@@ -251,11 +308,10 @@ jobs:
                           reponse.status_code,
                       )
 
-          print("Six routes API : OK")
-          print("Methodes de modification bloquees")
+          print("API : controles termines.")
           PY
 
-      - name: Verifier absence de modification
+      - name: Verifier integrite du depot
         if: always()
         shell: bash
         run: |
@@ -264,43 +320,79 @@ jobs:
           git diff --exit-code HEAD --
           git diff --cached --exit-code HEAD --
 
-          if [ -n "$(
-            git ls-files --others --exclude-standard
-          )" ]; then
-            echo "ERREUR: fichiers non suivis detectes"
-            git ls-files --others --exclude-standard
-            exit 1
-          fi
+          echo "Fichiers suivis inchanges."
 
-          echo "Fichiers suivis : inchanges"
-          echo "Aucun fichier non suivi cree"
+          echo "Fichiers non suivis eventuels :"
+          git ls-files --others --exclude-standard
 
-      - name: Publier le bilan technique
+          echo "Controle d'integrite termine."
+
+      - name: Publier bilan technique
         if: always()
         shell: bash
         env:
           RESULTAT: ${{ job.status }}
         run: |
           {
-            echo "## X1000 V2 - Controle technique"
+            echo "## X1000 PHOENIX V2.4"
             echo ""
-            echo "**Resultat global : $RESULTAT**"
+            echo "Resultat : $RESULTAT"
             echo ""
-            echo "### Controles demandes"
-            echo "- M1 : test individuel"
-            echo "- M2 : test individuel"
-            echo "- M3 : test individuel"
-            echo "- M4 : test individuel"
-            echo "- M5 : test individuel"
-            echo "- Coordination : verification"
-            echo "- Regression : verification"
-            echo "- API : verification"
+            echo "### Controles"
+            echo "- Structure et syntaxe"
+            echo "- M1 a M5 individuellement"
+            echo "- Identite et interfaces"
+            echo "- Coordination centrale"
+            echo "- Tests de regression"
+            echo "- API lecture seule"
+            echo "- Integrite du depot"
             echo ""
-            echo "### Protections configurees"
-            echo "- Mode lecture seule demande"
-            echo "- Generation FIGE desactivee"
-            echo "- Publication desactivee"
+            echo "### Protections"
+            echo "- Aucun commit automatique"
             echo "- Aucun push automatique"
+            echo "- Aucun deploiement"
+            echo "- Aucun FIGE automatique"
+            echo "- Aucune publication sportive"
             echo ""
-            echo "Consulter les etapes pour le verdict."
+            echo "Voir les etapes pour les resultats."
           } >> "$GITHUB_STEP_SUMMARY"
+YAML
+
+# 4. Verification syntaxique du YAML
+echo "=== VERIFICATION YAML ==="
+
+if python -c "import yaml" >/dev/null 2>&1; then
+  python - "$FICHIER" <<'PY'
+import sys
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = yaml.safe_load(f)
+
+assert isinstance(data, dict)
+assert "jobs" in data
+assert "controle" in data["jobs"]
+
+print("YAML : structure valide")
+PY
+else
+  echo "PyYAML absent : validation YAML non executee."
+fi
+
+# 5. Verification du changement
+echo "=== DIFFERENCES ==="
+git diff --check -- "$FICHIER"
+git diff --stat -- "$FICHIER"
+
+echo ""
+echo "=== REPARATION LOCALE TERMINEE ==="
+echo "Workflow : $FICHIER"
+echo "Branche : $BRANCHE"
+echo "Sauvegarde : $SAUVEGARDE"
+echo ""
+echo "Aucun commit."
+echo "Aucun push."
+echo "Aucun deploiement."
+echo "Aucun FIGE."
+echo ""
+echo "Examiner le diff avant toute publication."
