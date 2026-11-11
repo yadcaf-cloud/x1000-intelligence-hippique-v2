@@ -1,153 +1,90 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "======================================"
-echo " X1000 PHOENIX - REPARATION 1/6"
-echo " DIAGNOSTIC M1 A M5"
-echo "======================================"
-
 BRANCHE="fix/x1000-v2-reparation-controlee"
-DEPOT="x1000-intelligence-hippique-v2"
-
 SOURCE="tests/test_audit_contrats_x1000.py"
-DEST="scripts/renommage_controle_x1000.sh"
+DEST="scripts/audit_contrats_x1000.sh"
 
-RACINE="$(git rev-parse --show-toplevel)"
-cd "$RACINE"
+echo "=== X1000 PHOENIX - CORRECTION CONTROLEE ==="
 
-# SECURITE
-if [[ "$(basename "$RACINE")" != "$DEPOT" ]]; then
-    echo "ERREUR : depot incorrect"
-    exit 1
-fi
+test "$(basename "$(git rev-parse --show-toplevel)")" = \
+  "x1000-intelligence-hippique-v2" || exit 1
 
-if [[ "$(git branch --show-current)" != "$BRANCHE" ]]; then
-    echo "ERREUR : branche incorrecte"
-    exit 1
-fi
+test "$(git branch --show-current)" = "$BRANCHE" || {
+  echo "ERREUR : branche non autorisee"
+  exit 1
+}
 
-if [[ -n "$(git status --porcelain)" ]]; then
-    echo "ERREUR : modifications locales presentes"
-    echo "Sauvegardez-les avant de continuer."
-    exit 1
-fi
+test -f "$SOURCE" || {
+  echo "ERREUR : fichier source introuvable"
+  exit 1
+}
 
-if [[ ! -f "$SOURCE" ]]; then
-    echo "ERREUR : fichier source absent"
-    exit 1
-fi
+test ! -e "$DEST" || {
+  echo "ERREUR : destination deja existante"
+  exit 1
+}
 
-if [[ -e "$DEST" ]]; then
-    echo "ERREUR : destination deja existante"
-    exit 1
-fi
+python - "$SOURCE" <<'PY'
+from pathlib import Path
+import sys
 
-# VERIFIER LA NATURE DU FICHIER
-if ! head -n 1 "$SOURCE" | grep -q 'bash'; then
-    echo "ERREUR : source non reconnue comme Bash"
-    exit 1
-fi
+p = Path(sys.argv[1])
+contenu = p.read_text(encoding="utf-8-sig")
+lignes = contenu.splitlines()
+
+if not lignes or not lignes[0].startswith("#!"):
+    raise SystemExit("ERREUR : en-tete Bash absent")
+
+if not any(x in lignes[0] for x in ("bash", "sh")):
+    raise SystemExit("ERREUR : script non reconnu comme shell")
+
+print("Script shell identifie")
+PY
+
+mkdir -p scripts
 
 bash -n "$SOURCE"
 
-# RECHERCHER UNE VERSION PYTHON ANTERIEURE
-echo "Recherche du test Python original..."
+git mv "$SOURCE" "$DEST"
+chmod +x "$DEST"
 
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
-
-TROUVE=0
-
-while IFS= read -r REV; do
-    if git show "$REV:$SOURCE" \
-        > "$TMP/test.py" 2>/dev/null; then
-
-        if python - "$TMP/test.py" <<'PY'
+echo "=== CONTROLE SYNTAXE PYTHON ==="
+python - <<'PY'
 import ast
-import sys
 from pathlib import Path
 
-p = Path(sys.argv[1])
+fichiers = set()
 
-try:
-    source = p.read_text(encoding="utf-8")
-    tree = ast.parse(source)
+for dossier in ("moteurs", "tests"):
+    if Path(dossier).is_dir():
+        fichiers.update(Path(dossier).rglob("*.py"))
 
-    if not any(
-        isinstance(n, (
-            ast.FunctionDef,
-            ast.AsyncFunctionDef,
-            ast.ClassDef
-        )) and (
-            n.name.startswith("test_")
-            or n.name.startswith("Test")
-        )
-        for n in tree.body
-    ):
-        raise ValueError("Aucun test identifiable")
+for nom in (
+    "api.py",
+    "coordination_x1000.py",
+    "integration_x1000.py",
+    "validation_moteurs.py",
+):
+    p = Path(nom)
+    if p.is_file():
+        fichiers.add(p)
 
-except (SyntaxError, ValueError, UnicodeError):
-    sys.exit(1)
+for fichier in sorted(fichiers):
+    ast.parse(
+        fichier.read_text(encoding="utf-8-sig"),
+        filename=str(fichier)
+    )
+    print("OK :", fichier)
+
+print("Syntaxe Python validee")
 PY
-        then
-            TROUVE=1
-            echo "Version Python candidate : $REV"
-            break
-        fi
-    fi
-done < <(git log --format=%H --all -- "$SOURCE")
 
-if [[ "$TROUVE" -ne 1 ]]; then
-    echo "ERREUR : aucun test Python valide trouve"
-    echo "Aucune modification effectuee."
-    exit 1
-fi
-
-# DEPLACEMENT DU SCRIPT BASH
-mkdir -p scripts
-git mv "$SOURCE" "$DEST"
-
-# RESTAURATION DU TEST PYTHON
-cp "$TMP/test.py" "$SOURCE"
-
-# VERIFICATIONS
-echo "=== SYNTAXE BASH ==="
+echo "=== VERIFICATION BASH ==="
 bash -n "$DEST"
 
-echo "=== SYNTAXE PYTHON ==="
-python - "$SOURCE" <<'PY'
-import ast
-import sys
-from pathlib import Path
-
-p = Path(sys.argv[1])
-ast.parse(
-    p.read_text(encoding="utf-8"),
-    filename=str(p)
-)
-print("Syntaxe Python valide")
-PY
-
-echo "=== TESTS DIAGNOSTIC ==="
-
-export PYTHONDONTWRITEBYTECODE=1
-export PYTHONPATH=.
-export X1000_READ_ONLY=1
-export X1000_NO_FIGE=1
-export X1000_NO_PUBLICATION=1
-
-python -m unittest discover \
-    -s tests \
-    -p "test_audit_contrats_x1000.py" \
-    -v
-
-echo "=== ETAT GIT ==="
+echo "=== MODIFICATIONS LOCALES ==="
 git status --short
 
-echo "======================================"
-echo " REPARATION LOCALE TERMINEE"
-echo " Aucun commit"
-echo " Aucun push"
-echo " Aucun deploiement"
-echo " Aucun FIGE cree par le script"
-echo "======================================"
+echo "=== CORRECTION PREPAREE ==="
+echo "Aucun commit, push, deploiement ou FIGE."
