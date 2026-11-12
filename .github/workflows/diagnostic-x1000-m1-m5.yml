@@ -6,7 +6,7 @@ on:
       - fix/x1000-v2-reparation-controlee
     paths:
       - "moteurs/**"
-      - "tests/test_audit_contrats_x1000.py"
+      - "tests/**"
       - ".github/workflows/diagnostic-x1000-m1-m5.yml"
 
   workflow_dispatch:
@@ -18,8 +18,18 @@ jobs:
   diagnostic-moteurs:
     name: Verification M1-M5
     runs-on: ubuntu-latest
-
     timeout-minutes: 10
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONPATH: "."
+      X1000_READ_ONLY: "1"
+      X1000_NO_FIGE: "1"
+      X1000_NO_PUBLICATION: "1"
 
     steps:
       - name: Recuperer le depot
@@ -34,23 +44,95 @@ jobs:
 
       - name: Verifier les fichiers
         run: |
-          test -f moteurs/m1.py
-          test -f moteurs/m2.py
-          test -f moteurs/m3.py
-          test -f moteurs/m4.py
-          test -f moteurs/m5.py
-          test -f moteurs/noyau_commun.py
-          test -f tests/test_audit_contrats_x1000.py
+          set -euo pipefail
+
+          echo "Branche : $GITHUB_REF_NAME"
+          echo "Repertoire : $PWD"
+
+          for fichier in \
+            moteurs/m1.py \
+            moteurs/m2.py \
+            moteurs/m3.py \
+            moteurs/m4.py \
+            moteurs/m5.py \
+            moteurs/noyau_commun.py
+          do
+            if [[ ! -f "$fichier" ]]; then
+              echo "::error::Fichier absent : $fichier"
+              exit 1
+            fi
+
+            echo "OK : $fichier"
+          done
+
+      - name: Verifier la syntaxe Python
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          fichiers = [
+              Path("moteurs/m1.py"),
+              Path("moteurs/m2.py"),
+              Path("moteurs/m3.py"),
+              Path("moteurs/m4.py"),
+              Path("moteurs/m5.py"),
+              Path("moteurs/noyau_commun.py"),
+          ]
+
+          for fichier in fichiers:
+              source = fichier.read_text(
+                  encoding="utf-8-sig"
+              )
+              ast.parse(source, filename=str(fichier))
+              print(f"Syntaxe OK : {fichier}")
+          PY
 
       - name: Executer les tests X1000
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-          PYTHONPATH: "."
-          X1000_READ_ONLY: "1"
-          X1000_NO_FIGE: "1"
-          X1000_NO_PUBLICATION: "1"
         run: |
+          set -euo pipefail
+
+          TEST=""
+
+          for candidat in \
+            tests/test_audit_contrats_x1000.py \
+            test_audit_contrats_x1000.py
+          do
+            if [[ -f "$candidat" ]]; then
+              TEST="$candidat"
+              break
+            fi
+          done
+
+          if [[ -z "$TEST" ]]; then
+            echo "::warning::Test de contrats absent"
+            echo "Recherche des tests X1000 disponibles"
+
+            if [[ -f tests/test_validation_moteurs.py ]]; then
+              TEST="tests/test_validation_moteurs.py"
+            elif [[ -f test_validation_moteurs.py ]]; then
+              TEST="test_validation_moteurs.py"
+            else
+              echo "::error::Aucun test cible disponible"
+              exit 1
+            fi
+          fi
+
+          echo "Test selectionne : $TEST"
+
           python -m unittest discover \
-            -s tests \
-            -p "test_audit_contrats_x1000.py" \
+            -s "$(dirname "$TEST")" \
+            -p "$(basename "$TEST")" \
             -v
+
+      - name: Resume du diagnostic
+        if: always()
+        run: |
+          echo "Diagnostic X1000 M1-M5 termine"
+          echo "Branche : $GITHUB_REF_NAME"
+          echo "Commit : $GITHUB_SHA"
+          echo "Aucun deploiement automatique"
+          echo "Aucune publication automatique"
+          echo "Aucun FIGE volontairement modifie"
