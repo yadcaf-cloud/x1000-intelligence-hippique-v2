@@ -7,6 +7,8 @@ on:
     paths:
       - "moteurs/**"
       - "tests/**"
+      - "test_audit_contrats_x1000.py"
+      - "test_validation_moteurs.py"
       - ".github/workflows/diagnostic-x1000-m1-m5.yml"
 
   workflow_dispatch:
@@ -41,6 +43,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Installer les dependances de test
+        run: |
+          set -euo pipefail
+          python -m pip install pytest
 
       - name: Verifier les fichiers
         run: |
@@ -86,7 +93,10 @@ jobs:
               source = fichier.read_text(
                   encoding="utf-8-sig"
               )
-              ast.parse(source, filename=str(fichier))
+              ast.parse(
+                  source,
+                  filename=str(fichier)
+              )
               print(f"Syntaxe OK : {fichier}")
           PY
 
@@ -108,7 +118,7 @@ jobs:
 
           if [[ -z "$TEST" ]]; then
             echo "::warning::Test de contrats absent"
-            echo "Recherche des tests X1000 disponibles"
+            echo "Recherche des tests disponibles"
 
             if [[ -f tests/test_validation_moteurs.py ]]; then
               TEST="tests/test_validation_moteurs.py"
@@ -122,10 +132,7 @@ jobs:
 
           echo "Test selectionne : $TEST"
 
-          python -m unittest discover \
-            -s "$(dirname "$TEST")" \
-            -p "$(basename "$TEST")" \
-            -v
+          python -m pytest "$TEST" -v
 
       - name: Resume du diagnostic
         if: always()
