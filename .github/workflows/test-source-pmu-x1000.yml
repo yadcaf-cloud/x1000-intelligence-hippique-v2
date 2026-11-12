@@ -1,0 +1,63 @@
+name: X1000 - Test controle source PMU
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-pmu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    env:
+      X1000_READ_ONLY: "1"
+      X1000_NO_FIGE: "1"
+      X1000_NO_PUBLICATION: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - name: Recuperer la branche autorisee
+        uses: actions/checkout@v4
+        with:
+          ref: fix/x1000-v2-reparation-controlee
+          persist-credentials: false
+
+      - name: Verifier le depot
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = \
+            "yadcaf-cloud/x1000-intelligence-hippique-v2"
+          test "$(git branch --show-current)" = \
+            "fix/x1000-v2-reparation-controlee"
+          test -f audit_collecte_pmu.py
+
+      - name: Installer Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verifier syntaxe collecte
+        run: |
+          python -B - <<'PY'
+          import ast
+          from pathlib import Path
+          source = Path("audit_collecte_pmu.py")
+          ast.parse(source.read_text(encoding="utf-8-sig"))
+          print("Syntaxe Python valide")
+          PY
+
+      - name: Tester collecte PMU reelle
+        run: |
+          python -B audit_collecte_pmu.py
+
+      - name: Verifier absence de modifications
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
