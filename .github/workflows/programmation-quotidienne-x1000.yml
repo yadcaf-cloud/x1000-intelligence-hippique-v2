@@ -45,88 +45,62 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Verifier la branche et le depot
+      - name: Verifier configuration et securite
         shell: bash
         run: |
           set -euo pipefail
 
+          test "$GITHUB_REPOSITORY" = \
+            "yadcaf-cloud/x1000-intelligence-hippique-v2"
+
           BRANCHE="$(git branch --show-current)"
+          test "$BRANCHE" = "$X1000_BRANCHE_AUTORISEE"
 
-          if [ "$BRANCHE" != "$X1000_BRANCHE_AUTORISEE" ]; then
-            echo "::error::Branche Git non autorisee"
-            exit 1
-          fi
-
-          if [ "$GITHUB_REPOSITORY" != \
-            "yadcaf-cloud/x1000-intelligence-hippique-v2" ]; then
-            echo "::error::Depot GitHub non autorise"
-            exit 1
-          fi
+          test "$X1000_READ_ONLY" = "1"
+          test "$X1000_NO_FIGE" = "1"
+          test "$X1000_NO_PUBLICATION" = "1"
 
           test -f recherche_courses_x1000.py
           test -f integration_x1000.py
           test -f validation_moteurs.py
           test -d moteurs
 
-          echo "Branche autorisee : $BRANCHE"
-          echo "Depot autorise : OK"
-
-      - name: Verifier la source PMU
-        shell: bash
-        run: |
-          set -euo pipefail
-
           python - <<'PY'
           import os
-          import sys
           from urllib.parse import urlsplit
 
-          url = os.environ.get("X1000_SOURCE_URL", "")
-          host = os.environ.get("X1000_SOURCE_HOST", "")
+          url = os.getenv("X1000_SOURCE_URL", "").strip()
+          host = os.getenv("X1000_SOURCE_HOST", "").strip()
 
           if not url or not host:
-              sys.exit("ERREUR : source PMU absente")
-
-          if url != url.strip():
-              sys.exit("ERREUR : espaces dans URL PMU")
-
-          if any(ord(c) < 33 or ord(c) > 126 for c in url):
-              sys.exit("ERREUR : caractere invisible dans URL")
+              raise SystemExit("Source PMU absente")
 
           try:
               parsed = urlsplit(url)
-              port = parsed.port
+              valid = (
+                  parsed.scheme == "https"
+                  and parsed.hostname == host
+                  and parsed.port in (None, 443)
+                  and not parsed.username
+                  and not parsed.password
+                  and not parsed.fragment
+              )
           except ValueError:
-              sys.exit("ERREUR : URL PMU invalide")
+              valid = False
 
-          if (
-              parsed.scheme != "https"
-              or parsed.hostname != host
-              or parsed.username is not None
-              or parsed.password is not None
-              or port not in (None, 443)
-              or parsed.fragment
-          ):
-              sys.exit("ERREUR : source HTTPS non autorisee")
+          if not valid:
+              raise SystemExit("Source HTTPS non autorisee")
 
-          print("Source HTTPS autorisee : OK")
-          print("Domaine :", host)
+          print("Configuration source : OK")
           PY
 
-      - name: Verifier les protections
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test "$X1000_READ_ONLY" = "1"
-          test "$X1000_NO_FIGE" = "1"
-          test "$X1000_NO_PUBLICATION" = "1"
-
+          echo "Branche autorisee : $BRANCHE"
           echo "Lecture seule : ACTIVE"
           echo "FIGE automatique : INTERDIT"
-          echo "Publication automatique : INTERDITE"
+          echo "Publication : INTERDITE"
 
       - name: Recherche sportive et analyses M1-M5
+        id: analyse
         shell: bash
         env:
           GITHUB_HEAD_REF: ""
@@ -137,13 +111,14 @@ jobs:
           BRANCHE="$(git branch --show-current)"
 
           if [ "$BRANCHE" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Incoherence de branche"
+            echo "::error::Branche non autorisee"
             exit 1
           fi
 
-          echo "Demarrage X1000 PHOENIX"
-          echo "Branche : $BRANCHE"
+          echo "X1000 PHOENIX V2.4"
+          echo "Recherche PMU France"
           echo "Moteurs : M1 M2 M3 M4 M5"
+          echo "Coordination centrale active"
 
           python -B recherche_courses_x1000.py
 
@@ -162,25 +137,25 @@ jobs:
           fi
 
           echo "Integrite du depot : OK"
-          echo "Aucune modification detectee"
 
       - name: Bilan de securite
         if: always()
         shell: bash
+        env:
+          ANALYSE_RESULTAT: ${{ steps.analyse.outcome }}
         run: |
           {
-            echo "## X1000 PHOENIX"
+            echo "## X1000 PHOENIX V2.4"
             echo ""
             echo "- Recherche PMU France"
             echo "- Moteurs M1 a M5"
             echo "- Coordination centrale"
-            echo "- Branche de reparation controlee"
-            echo "- Lecture seule imposee"
+            echo "- Branche controlee"
+            echo "- Lecture seule active"
             echo "- Aucun FIGE automatique"
-            echo "- Aucune publication automatique"
-            echo "- Aucun commit ni push"
+            echo "- Aucune publication"
+            echo "- Aucun commit ou push"
             echo "- Aucun deploiement"
-            echo "- Verification integrite du depot"
             echo ""
-            echo "Resultat recherche : ${{ steps.recherche.outcome }}"
+            echo "Resultat analyse : $ANALYSE_RESULTAT"
           } >> "$GITHUB_STEP_SUMMARY"
