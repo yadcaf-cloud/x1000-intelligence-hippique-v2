@@ -1,0 +1,94 @@
+name: X1000 - Recherche automatique quotidienne
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 6,10,13,16 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x1000-recherche-quotidienne
+  cancel-in-progress: false
+
+jobs:
+  recherche:
+    name: Recherche courses PMU France - M1 a M5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    env:
+      TZ: Europe/Paris
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONNOUSERSITE: "1"
+      X1000_READ_ONLY: "1"
+      X1000_NO_FIGE: "1"
+      X1000_NO_PUBLICATION: "1"
+      X1000_SOURCE_URL: ${{ vars.X1000_SOURCE_URL }}
+      X1000_SOURCE_HOST: ${{ vars.X1000_SOURCE_HOST }}
+
+    steps:
+      - name: Recuperer la branche autorisee
+        uses: actions/checkout@v4
+        with:
+          ref: fix/x1000-v2-reparation-controlee
+          persist-credentials: false
+
+      - name: Installer Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verifier la configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$(git branch --show-current)" = \
+            "fix/x1000-v2-reparation-controlee"
+
+          test -f recherche_courses_x1000.py
+
+          if [ -z "$X1000_SOURCE_URL" ] || \
+             [ -z "$X1000_SOURCE_HOST" ]; then
+            echo "::error::Source PMU non configuree"
+            exit 1
+          fi
+
+      - name: Recherche sportive et analyses M1-M5
+        shell: bash
+        env:
+          GITHUB_REF_NAME: fix/x1000-v2-reparation-controlee
+        run: |
+          set -euo pipefail
+
+          python -B recherche_courses_x1000.py
+
+      - name: Verifier integrite du depot
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git diff --exit-code
+          git diff --cached --exit-code
+
+          test -z "$(
+            git ls-files --others --exclude-standard
+          )"
+
+      - name: Bilan de securite
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## X1000 PHOENIX"
+            echo ""
+            echo "- Recherche quotidienne programmee"
+            echo "- Courses PMU France"
+            echo "- M1 a M5 et coordination"
+            echo "- Aucun FIGE automatique"
+            echo "- Aucune publication"
+            echo "- Archives protegees"
+          } >> "$GITHUB_STEP_SUMMARY"
