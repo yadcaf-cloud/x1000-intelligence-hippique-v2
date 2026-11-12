@@ -1,0 +1,112 @@
+name: X1000 - Programmation quotidienne
+
+on:
+  schedule:
+    # 06:00 UTC = 07:00 ou 08:00 en France
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: x1000-quotidien-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  recherche-quotidienne:
+    name: Recherche PMU France - M1 a M5
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      X1000_READ_ONLY: "1"
+      X1000_NO_FIGE: "1"
+      X1000_NO_PUBLICATION: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Verifier la branche autorisee
+        env:
+          BRANCHE: ${{ github.ref_name }}
+          DEPOT: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          test "$BRANCHE" = \
+            "fix/x1000-v2-reparation-controlee"
+
+          test "$DEPOT" = \
+            "yadcaf-cloud/x1000-intelligence-hippique-v2"
+
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer les dependances
+        run: |
+          set -euo pipefail
+
+          python -m pip install --upgrade pip
+
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          fi
+
+      - name: Verifier les moteurs M1 a M5
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import importlib.util
+
+          for moteur in ("m1", "m2", "m3", "m4", "m5"):
+              candidats = (
+                  moteur,
+                  "moteurs." + moteur,
+              )
+
+              disponible = any(
+                  importlib.util.find_spec(nom) is not None
+                  for nom in candidats
+              )
+
+              print(
+                  moteur.upper(),
+                  "disponible" if disponible
+                  else "interface non trouvee"
+              )
+          PY
+
+      - name: Rechercher les courses du jour
+        run: |
+          set -euo pipefail
+
+          SCRIPT="recherche_courses_francaises.py"
+
+          if [ ! -f "$SCRIPT" ]; then
+            echo "::error::Script absent : $SCRIPT"
+            exit 1
+          fi
+
+          python "$SCRIPT"
+
+      - name: Terminer sans publication
+        if: always()
+        run: |
+          echo "X1000 - Controle quotidien termine"
+          echo "Aucun commit automatique"
+          echo "Aucun push automatique"
+          echo "Aucun deploiement automatique"
+          echo "Aucun FIGE automatique"
