@@ -1,8 +1,9 @@
-name: X1000 - Recherche quotidienne M1-M5
+name: X1000 - Recherche quotidienne M1-M5 securisee
 
 on:
   workflow_dispatch:
   schedule:
+    # UTC : 06h17 hiver / 07h17 ete a Paris
     - cron: "17 5 * * *"
 
 permissions:
@@ -14,9 +15,18 @@ concurrency:
 
 jobs:
   recherche:
-    if: github.repository == 'yadcaf-cloud/x1000-intelligence-hippique-v2'
+    name: Sources PMU et analyses M1-M5
+
+    if: >-
+      github.repository ==
+      'yadcaf-cloud/x1000-intelligence-hippique-v2'
+
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        shell: bash
 
     env:
       TZ: Europe/Paris
@@ -35,97 +45,257 @@ jobs:
           ref: fix/x1000-v2-reparation-controlee
           persist-credentials: false
 
-      - name: Verifier depot et commit
-        shell: bash
+      - name: Controler identite et commit
         run: |
           set -euo pipefail
-          test "$GITHUB_REPOSITORY" = \
-            "yadcaf-cloud/x1000-intelligence-hippique-v2"
+
+          BRANCHE="fix/x1000-v2-reparation-controlee"
+          DEPOT="yadcaf-cloud/x1000-intelligence-hippique-v2"
+
+          test "$GITHUB_REPOSITORY" = "$DEPOT"
 
           git fetch --no-tags origin \
-            '+refs/heads/fix/x1000-v2-reparation-controlee:refs/remotes/origin/fix/x1000-v2-reparation-controlee'
+            "+refs/heads/${BRANCHE}:refs/remotes/origin/${BRANCHE}"
 
-          test "$(git rev-parse HEAD)" = \
-            "$(git rev-parse refs/remotes/origin/fix/x1000-v2-reparation-controlee)"
+          LOCAL="$(git rev-parse HEAD)"
+          DISTANT="$(git rev-parse "refs/remotes/origin/${BRANCHE}")"
 
-          test -n "$X1000_SOURCE_URL"
-          test -n "$X1000_SOURCE_HOST"
+          test "$LOCAL" = "$DISTANT" || {
+            echo "::error::Commit non autorise"
+            exit 1
+          }
+
+          test -n "$X1000_SOURCE_URL" || {
+            echo "::error::X1000_SOURCE_URL absente"
+            exit 1
+          }
+
+          test -n "$X1000_SOURCE_HOST" || {
+            echo "::error::X1000_SOURCE_HOST absent"
+            exit 1
+          }
+
+          echo "Depot et commit autorises : OK"
 
       - name: Installer Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Verifier M1 a M5 et coordination
-        shell: bash
+      - name: Verifier syntaxe et moteurs
         run: |
           set -euo pipefail
+
           python -B - <<'PY'
           import ast
           from pathlib import Path
 
-          noms = [
+          fichiers = [
               "recherche_courses_x1000.py",
               "x1000_sources_officielles.py",
               "integration_x1000.py",
               "coordination_x1000.py",
               "validation_moteurs.py",
           ]
-          noms += [
+
+          fichiers += [
               f"moteurs/m{i}.py"
               for i in range(1, 6)
           ]
 
-          for nom in noms:
-              fichier = Path(nom)
+          for nom in fichiers:
+              chemin = Path(nom)
               ast.parse(
-                  fichier.read_text(encoding="utf-8"),
-                  filename=nom
+                  chemin.read_text(encoding="utf-8"),
+                  filename=nom,
               )
-              print("OK :", nom)
+              print("SYNTAXE OK :", nom)
 
           from moteurs import m1, m2, m3, m4, m5
           from integration_x1000 import executer_integration
-          print("M1-M5 : IMPORTS OK")
+
+          for indice, moteur in enumerate(
+              (m1, m2, m3, m4, m5), start=1
+          ):
+              assert moteur.MOTEUR == f"M{indice}"
+
+          print("M1-M5 : OK")
+          print("Coordination : import OK")
           PY
 
-      - name: Verifier les sources officielles
-        shell: bash
+      - name: Creer empreinte initiale du depot
         run: |
           set -euo pipefail
+
+          python -B - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          racine = Path.cwd()
+          inventaire = {}
+
+          for base, dossiers, fichiers in os.walk(racine):
+              dossiers[:] = [
+                  d for d in dossiers
+                  if d not in (".git", "__pycache__")
+              ]
+
+              for nom in fichiers:
+                  chemin = Path(base) / nom
+                  relatif = chemin.relative_to(racine).as_posix()
+
+                  if chemin.is_symlink():
+                      inventaire[relatif] = {
+                          "lien": os.readlink(chemin)
+                      }
+                  elif chemin.is_file():
+                      inventaire[relatif] = {
+                          "sha256": hashlib.sha256(
+                              chemin.read_bytes()
+                          ).hexdigest()
+                      }
+
+          destination = (
+              Path(os.environ["RUNNER_TEMP"])
+              / "x1000-inventaire-initial.json"
+          )
+
+          destination.write_text(
+              json.dumps(inventaire, sort_keys=True),
+              encoding="utf-8",
+          )
+
+          print("Inventaire initial :", len(inventaire))
+          PY
+
+      - name: Tester les sources officielles
+        run: |
+          set -euo pipefail
+
           python -B x1000_sources_officielles.py --self-test
           python -B x1000_sources_officielles.py
 
-      - name: Recherche et analyses M1-M5
-        shell: bash
+      - name: Recherche et analyse M1-M5
         run: |
           set -euo pipefail
-          python -B recherche_courses_x1000.py
 
-      - name: Controler aucune modification
+          python -B - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          branche = "fix/x1000-v2-reparation-controlee"
+
+          environnement = os.environ.copy()
+
+          # Le script existant controle GITHUB_HEAD_REF.
+          # Le checkout a ete verifie avant execution.
+          environnement["GITHUB_HEAD_REF"] = branche
+
+          commande = [
+              sys.executable,
+              "-B",
+              "recherche_courses_x1000.py",
+          ]
+
+          resultat = subprocess.run(
+              commande,
+              env=environnement,
+              check=False,
+          )
+
+          sys.exit(resultat.returncode)
+          PY
+
+      - name: Verifier integrite complete
         if: always()
-        shell: bash
         run: |
           set -euo pipefail
+
+          python -B - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          racine = Path.cwd()
+          reference = (
+              Path(os.environ["RUNNER_TEMP"])
+              / "x1000-inventaire-initial.json"
+          )
+
+          if not reference.is_file():
+              raise SystemExit(
+                  "Inventaire initial absent : controle impossible"
+              )
+
+          initial = json.loads(
+              reference.read_text(encoding="utf-8")
+          )
+
+          actuel = {}
+
+          for base, dossiers, fichiers in os.walk(racine):
+              dossiers[:] = [
+                  d for d in dossiers
+                  if d not in (".git", "__pycache__")
+              ]
+
+              for nom in fichiers:
+                  chemin = Path(base) / nom
+                  relatif = chemin.relative_to(racine).as_posix()
+
+                  if chemin.is_symlink():
+                      actuel[relatif] = {
+                          "lien": os.readlink(chemin)
+                      }
+                  elif chemin.is_file():
+                      actuel[relatif] = {
+                          "sha256": hashlib.sha256(
+                              chemin.read_bytes()
+                          ).hexdigest()
+                      }
+
+          ajoutes = sorted(actuel.keys() - initial.keys())
+          supprimes = sorted(initial.keys() - actuel.keys())
+          modifies = sorted(
+              cle for cle in initial.keys() & actuel.keys()
+              if initial[cle] != actuel[cle]
+          )
+
+          for categorie, fichiers in (
+              ("AJOUT", ajoutes),
+              ("SUPPRESSION", supprimes),
+              ("MODIFICATION", modifies),
+          ):
+              for fichier in fichiers:
+                  print(f"::error::{categorie} : {fichier}")
+
+          if ajoutes or supprimes or modifies:
+              raise SystemExit(
+                  "Integrite X1000 : modification detectee"
+              )
+
+          print("INTEGRITE X1000 : OK")
+          print("Fichiers controles :", len(actuel))
+          PY
+
           git diff --exit-code
           git diff --cached --exit-code
 
-          if [ -n "$(git ls-files --others --exclude-standard)" ]; then
-            echo "::error::Fichiers non suivis detectes"
-            git ls-files --others --exclude-standard
-            exit 1
-          fi
-
-      - name: Bilan de securite
+      - name: Bilan X1000 PHOENIX
         if: always()
-        shell: bash
         run: |
           {
-            echo "## X1000 PHOENIX"
-            echo "- Analyses M1-M5 : voir logs"
-            echo "- Lecture seule : active"
+            echo "## X1000 PHOENIX - Recherche quotidienne"
+            echo ""
+            echo "- Branche : reparation controlee"
+            echo "- Sources : voir les journaux"
+            echo "- M1-M5 : voir les journaux"
             echo "- FIGE automatique : interdit"
             echo "- Publication : interdite"
-            echo "- Aucun deploiement"
-            echo "- Aucune modification autorisee"
+            echo "- Deploiement : absent"
+            echo "- Integrite : voir le controle final"
           } >> "$GITHUB_STEP_SUMMARY"
