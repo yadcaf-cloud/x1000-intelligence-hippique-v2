@@ -1,0 +1,177 @@
+name: X1000 - Diagnostic et reparation controlee
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    name: Controle X1000 M1-M5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONNOUSERSITE: "1"
+      X1000_READ_ONLY: "1"
+      X1000_NO_FIGE: "1"
+      X1000_NO_PUBLICATION: "1"
+      X1000_SOURCE_URL: ${{ vars.X1000_SOURCE_URL }}
+      X1000_SOURCE_HOST: ${{ vars.X1000_SOURCE_HOST }}
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+        with:
+          ref: fix/x1000-v2-reparation-controlee
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Diagnostic complet sans ecriture
+        shell: bash
+        run: |
+          python -B - <<'PY'
+          import ast
+          import os
+          import sys
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          erreurs = []
+          avertissements = []
+
+          def verifier(nom):
+              fichier = Path(nom)
+              if not fichier.is_file():
+                  erreurs.append(f"Fichier absent : {nom}")
+                  return
+
+              try:
+                  ast.parse(
+                      fichier.read_text(
+                          encoding="utf-8-sig"
+                      ),
+                      filename=nom
+                  )
+                  print(f"OK : {nom}")
+              except (SyntaxError, UnicodeError) as exc:
+                  erreurs.append(f"{nom} : {exc}")
+
+          print("=== MOTEURS M1-M5 ===")
+
+          for i in range(1, 6):
+              verifier(f"moteurs/m{i}.py")
+
+          print("=== COORDINATION ===")
+
+          for nom in (
+              "moteurs/noyau_commun.py",
+              "coordination_x1000.py",
+              "integration_x1000.py",
+              "validation_moteurs.py",
+              "api.py",
+              "recherche_courses_x1000.py",
+          ):
+              verifier(nom)
+
+          print("=== TESTS ===")
+
+          tests = Path("tests")
+          if not tests.is_dir():
+              erreurs.append("Dossier tests absent")
+          else:
+              fichiers = sorted(
+                  tests.rglob("test_*.py")
+              )
+              if not fichiers:
+                  erreurs.append("Aucun test trouve")
+              for fichier in fichiers:
+                  verifier(str(fichier))
+
+          print("=== SECURITE ===")
+
+          for cle in (
+              "X1000_READ_ONLY",
+              "X1000_NO_FIGE",
+              "X1000_NO_PUBLICATION",
+          ):
+              if os.getenv(cle) != "1":
+                  erreurs.append(
+                      f"Protection inactive : {cle}"
+                  )
+              else:
+                  print(f"{cle} : OK")
+
+          print("=== SOURCE PMU ===")
+
+          url = os.getenv(
+              "X1000_SOURCE_URL", ""
+          ).strip()
+
+          host = os.getenv(
+              "X1000_SOURCE_HOST", ""
+          ).strip().lower()
+
+          if not url or not host:
+              erreurs.append(
+                  "Source PMU non configuree : "
+                  "URL ou HOST absent"
+              )
+          else:
+              adresse = urlparse(url)
+              if (
+                  adresse.scheme != "https"
+                  or adresse.hostname != host
+                  or adresse.username
+                  or adresse.password
+                  or adresse.port not in (None, 443)
+                  or adresse.fragment
+              ):
+                  erreurs.append(
+                      "Source HTTPS invalide"
+                  )
+              else:
+                  print("Configuration HTTPS : OK")
+                  avertissements.append(
+                      "Source non testee sur le reseau"
+                  )
+
+          print("=== RESULTATS ===")
+
+          for message in avertissements:
+              print("AVERTISSEMENT :", message)
+
+          for message in erreurs:
+              print("ERREUR :", message)
+
+          print("Erreurs :", len(erreurs))
+
+          if erreurs:
+              sys.exit(1)
+
+          print("DIAGNOSTIC STATIQUE REUSSI")
+          PY
+
+      - name: Verifier les modifications
+        if: always()
+        run: |
+          git diff --exit-code HEAD --
+          git diff --cached --exit-code HEAD --
+          echo "Aucun fichier suivi modifie"
+
+      - name: Bilan
+        if: always()
+        run: |
+          echo "Diagnostic termine"
+          echo "Aucun pronostic modifie"
+          echo "Aucun FIGE modifie"
+          echo "Aucune archive modifiee"
+          echo "Aucun commit automatique"
+          echo "Aucun push automatique"
+          echo "Aucun deploiement"
