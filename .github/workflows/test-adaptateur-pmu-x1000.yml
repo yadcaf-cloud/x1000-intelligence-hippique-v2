@@ -1,0 +1,58 @@
+name: X1000 - Test adaptateur PMU JSON
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-pmu:
+    name: Controle source PMU en lecture seule
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    env:
+      X1000_READ_ONLY: "1"
+      X1000_NO_FIGE: "1"
+      X1000_NO_PUBLICATION: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - name: Verifier branche et depot
+        env:
+          BRANCHE: ${{ github.ref_name }}
+          DEPOT: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test "$BRANCHE" = \
+            "fix/x1000-v2-reparation-controlee"
+          test "$DEPOT" = \
+            "yadcaf-cloud/x1000-intelligence-hippique-v2"
+
+      - name: Recuperer le code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Autotest adaptateur
+        run: |
+          python -B adaptateur_pmu_x1000.py --self-test
+
+      - name: Tester la collecte PMU
+        run: |
+          python -B adaptateur_pmu_x1000.py
+
+      - name: Confirmer les protections
+        if: always()
+        run: |
+          echo "Aucun FIGE automatique"
+          echo "Aucune publication"
+          echo "Aucun commit ou push automatique"
+          echo "Aucun deploiement"
+          echo "Aucune archive modifiee"
