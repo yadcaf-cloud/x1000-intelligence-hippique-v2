@@ -1,90 +1,87 @@
-#!/usr/bin/env bash
 set -euo pipefail
 
 BRANCHE="fix/x1000-v2-reparation-controlee"
 SOURCE="tests/test_audit_contrats_x1000.py"
 DEST="scripts/audit_contrats_x1000.sh"
 
-echo "=== X1000 PHOENIX - CORRECTION CONTROLEE ==="
+echo "=== X1000 PHOENIX : REPARATION CONTROLEE ==="
 
 test "$(basename "$(git rev-parse --show-toplevel)")" = \
-  "x1000-intelligence-hippique-v2" || exit 1
+  "x1000-intelligence-hippique-v2"
 
-test "$(git branch --show-current)" = "$BRANCHE" || {
-  echo "ERREUR : branche non autorisee"
-  exit 1
-}
+test "$(git branch --show-current)" = "$BRANCHE"
 
-test -f "$SOURCE" || {
-  echo "ERREUR : fichier source introuvable"
-  exit 1
-}
-
-test ! -e "$DEST" || {
-  echo "ERREUR : destination deja existante"
-  exit 1
-}
+test -f "$SOURCE"
+test ! -e "$DEST"
 
 python - "$SOURCE" <<'PY'
 from pathlib import Path
 import sys
 
 p = Path(sys.argv[1])
-contenu = p.read_text(encoding="utf-8-sig")
-lignes = contenu.splitlines()
+source = p.read_text(encoding="utf-8-sig")
+lines = source.splitlines()
 
-if not lignes or not lignes[0].startswith("#!"):
-    raise SystemExit("ERREUR : en-tete Bash absent")
+if not lines or lines[0] != "#!/usr/bin/env bash":
+    raise SystemExit("ERREUR : fichier Bash inattendu")
 
-if not any(x in lignes[0] for x in ("bash", "sh")):
-    raise SystemExit("ERREUR : script non reconnu comme shell")
+if "set -euo pipefail" not in source:
+    raise SystemExit("ERREUR : contenu inattendu")
 
-print("Script shell identifie")
+print("Script Bash confirme")
 PY
-
-mkdir -p scripts
 
 bash -n "$SOURCE"
 
+mkdir -p scripts
 git mv "$SOURCE" "$DEST"
 chmod +x "$DEST"
 
-echo "=== CONTROLE SYNTAXE PYTHON ==="
 python - <<'PY'
 import ast
 from pathlib import Path
 
-fichiers = set()
+files = set()
 
-for dossier in ("moteurs", "tests"):
-    if Path(dossier).is_dir():
-        fichiers.update(Path(dossier).rglob("*.py"))
+for folder in ("moteurs", "tests"):
+    if Path(folder).is_dir():
+        files.update(Path(folder).rglob("*.py"))
 
-for nom in (
+for name in (
     "api.py",
     "coordination_x1000.py",
     "integration_x1000.py",
     "validation_moteurs.py",
 ):
-    p = Path(nom)
+    p = Path(name)
     if p.is_file():
-        fichiers.add(p)
+        files.add(p)
 
-for fichier in sorted(fichiers):
-    ast.parse(
-        fichier.read_text(encoding="utf-8-sig"),
-        filename=str(fichier)
+errors = []
+
+for p in sorted(files):
+    try:
+        ast.parse(
+            p.read_text(encoding="utf-8-sig"),
+            filename=str(p)
+        )
+        print("OK :", p)
+    except (SyntaxError, UnicodeError) as exc:
+        errors.append((p, exc))
+        print("ERREUR :", p, exc)
+
+if errors:
+    raise SystemExit(
+        f"{len(errors)} fichier(s) Python invalide(s)"
     )
-    print("OK :", fichier)
 
-print("Syntaxe Python validee")
+print("SYNTAXE PYTHON : OK")
 PY
 
-echo "=== VERIFICATION BASH ==="
 bash -n "$DEST"
 
-echo "=== MODIFICATIONS LOCALES ==="
+echo "=== ETAT DES MODIFICATIONS ==="
 git status --short
 
-echo "=== CORRECTION PREPAREE ==="
+echo "=== REPARATION LOCALE TERMINEE ==="
 echo "Aucun commit, push, deploiement ou FIGE."
