@@ -1,20 +1,22 @@
-name: X1000 - Recherche quotidienne securisee
+name: X1000 - Recherche quotidienne M1-M5
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  group: x1000-recherche-${{ github.ref }}
+  group: x1000-recherche-quotidienne
   cancel-in-progress: false
 
 jobs:
   recherche:
-    name: Recherche et analyses M1-M5
+    if: github.repository == 'yadcaf-cloud/x1000-intelligence-hippique-v2'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     env:
       TZ: Europe/Paris
@@ -27,57 +29,103 @@ jobs:
       X1000_SOURCE_HOST: ${{ vars.X1000_SOURCE_HOST }}
 
     steps:
-      - name: Recuperer la branche
+      - name: Recuperer la branche autorisee
         uses: actions/checkout@v4
         with:
+          ref: fix/x1000-v2-reparation-controlee
           persist-credentials: false
 
-      - name: Verifier branche de reparation
+      - name: Verifier depot et commit
         shell: bash
         run: |
           set -euo pipefail
+          test "$GITHUB_REPOSITORY" = \
+            "yadcaf-cloud/x1000-intelligence-hippique-v2"
 
-          test "$GITHUB_REF_NAME" = \
-            "fix/x1000-v2-reparation-controlee"
+          git fetch --no-tags origin \
+            '+refs/heads/fix/x1000-v2-reparation-controlee:refs/remotes/origin/fix/x1000-v2-reparation-controlee'
 
-          test -f recherche_courses_x1000.py
+          test "$(git rev-parse HEAD)" = \
+            "$(git rev-parse refs/remotes/origin/fix/x1000-v2-reparation-controlee)"
+
+          test -n "$X1000_SOURCE_URL"
+          test -n "$X1000_SOURCE_HOST"
 
       - name: Installer Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Executer la recherche controlee
+      - name: Verifier M1 a M5 et coordination
         shell: bash
         run: |
           set -euo pipefail
+          python -B - <<'PY'
+          import ast
+          from pathlib import Path
 
+          noms = [
+              "recherche_courses_x1000.py",
+              "x1000_sources_officielles.py",
+              "integration_x1000.py",
+              "coordination_x1000.py",
+              "validation_moteurs.py",
+          ]
+          noms += [
+              f"moteurs/m{i}.py"
+              for i in range(1, 6)
+          ]
+
+          for nom in noms:
+              fichier = Path(nom)
+              ast.parse(
+                  fichier.read_text(encoding="utf-8"),
+                  filename=nom
+              )
+              print("OK :", nom)
+
+          from moteurs import m1, m2, m3, m4, m5
+          from integration_x1000 import executer_integration
+          print("M1-M5 : IMPORTS OK")
+          PY
+
+      - name: Verifier les sources officielles
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B x1000_sources_officielles.py --self-test
+          python -B x1000_sources_officielles.py
+
+      - name: Recherche et analyses M1-M5
+        shell: bash
+        run: |
+          set -euo pipefail
           python -B recherche_courses_x1000.py
 
-      - name: Verifier integrite
+      - name: Controler aucune modification
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-
           git diff --exit-code
           git diff --cached --exit-code
 
-          test -z "$(
+          if [ -n "$(git ls-files --others --exclude-standard)" ]; then
+            echo "::error::Fichiers non suivis detectes"
             git ls-files --others --exclude-standard
-          )"
+            exit 1
+          fi
 
       - name: Bilan de securite
         if: always()
         shell: bash
         run: |
           {
-            echo "## X1000 - Recherche securisee"
-            echo ""
-            echo "- Branche de reparation uniquement"
-            echo "- Lecture seule"
-            echo "- Aucun FIGE automatique"
-            echo "- Aucune publication automatique"
-            echo "- Aucune modification d'archives"
-            echo "- Source HTTPS explicitement autorisee"
+            echo "## X1000 PHOENIX"
+            echo "- Analyses M1-M5 : voir logs"
+            echo "- Lecture seule : active"
+            echo "- FIGE automatique : interdit"
+            echo "- Publication : interdite"
+            echo "- Aucun deploiement"
+            echo "- Aucune modification autorisee"
           } >> "$GITHUB_STEP_SUMMARY"
