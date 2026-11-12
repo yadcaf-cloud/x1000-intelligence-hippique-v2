@@ -22,11 +22,15 @@ jobs:
       TZ: Europe/Paris
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONNOUSERSITE: "1"
+
       X1000_READ_ONLY: "1"
       X1000_NO_FIGE: "1"
       X1000_NO_PUBLICATION: "1"
+
+      X1000_BRANCHE_AUTORISEE: fix/x1000-v2-reparation-controlee
+
       X1000_SOURCE_URL: ${{ vars.X1000_SOURCE_URL }}
-      X1000_SOURCE_HOST: ${{ vars.X1000_SOURCE_HOST }}
+      X1000_SOURCE_HOST: online.turfinfo.api.pmu.fr
 
     steps:
       - name: Recuperer la branche autorisee
@@ -34,34 +38,112 @@ jobs:
         with:
           ref: fix/x1000-v2-reparation-controlee
           persist-credentials: false
+          clean: true
 
       - name: Installer Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Verifier la configuration
+      - name: Verifier la branche et le depot
         shell: bash
         run: |
           set -euo pipefail
 
-          test "$(git branch --show-current)" = \
-            "fix/x1000-v2-reparation-controlee"
+          BRANCHE="$(git branch --show-current)"
 
-          test -f recherche_courses_x1000.py
-
-          if [ -z "$X1000_SOURCE_URL" ] || \
-             [ -z "$X1000_SOURCE_HOST" ]; then
-            echo "::error::Source PMU non configuree"
+          if [ "$BRANCHE" != "$X1000_BRANCHE_AUTORISEE" ]; then
+            echo "::error::Branche Git non autorisee"
             exit 1
           fi
+
+          if [ "$GITHUB_REPOSITORY" != \
+            "yadcaf-cloud/x1000-intelligence-hippique-v2" ]; then
+            echo "::error::Depot GitHub non autorise"
+            exit 1
+          fi
+
+          test -f recherche_courses_x1000.py
+          test -f integration_x1000.py
+          test -f validation_moteurs.py
+          test -d moteurs
+
+          echo "Branche autorisee : $BRANCHE"
+          echo "Depot autorise : OK"
+
+      - name: Verifier la source PMU
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import os
+          import sys
+          from urllib.parse import urlsplit
+
+          url = os.environ.get("X1000_SOURCE_URL", "")
+          host = os.environ.get("X1000_SOURCE_HOST", "")
+
+          if not url or not host:
+              sys.exit("ERREUR : source PMU absente")
+
+          if url != url.strip():
+              sys.exit("ERREUR : espaces dans URL PMU")
+
+          if any(ord(c) < 33 or ord(c) > 126 for c in url):
+              sys.exit("ERREUR : caractere invisible dans URL")
+
+          try:
+              parsed = urlsplit(url)
+              port = parsed.port
+          except ValueError:
+              sys.exit("ERREUR : URL PMU invalide")
+
+          if (
+              parsed.scheme != "https"
+              or parsed.hostname != host
+              or parsed.username is not None
+              or parsed.password is not None
+              or port not in (None, 443)
+              or parsed.fragment
+          ):
+              sys.exit("ERREUR : source HTTPS non autorisee")
+
+          print("Source HTTPS autorisee : OK")
+          print("Domaine :", host)
+          PY
+
+      - name: Verifier les protections
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$X1000_READ_ONLY" = "1"
+          test "$X1000_NO_FIGE" = "1"
+          test "$X1000_NO_PUBLICATION" = "1"
+
+          echo "Lecture seule : ACTIVE"
+          echo "FIGE automatique : INTERDIT"
+          echo "Publication automatique : INTERDITE"
 
       - name: Recherche sportive et analyses M1-M5
         shell: bash
         env:
+          GITHUB_HEAD_REF: ""
           GITHUB_REF_NAME: fix/x1000-v2-reparation-controlee
         run: |
           set -euo pipefail
+
+          BRANCHE="$(git branch --show-current)"
+
+          if [ "$BRANCHE" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Incoherence de branche"
+            exit 1
+          fi
+
+          echo "Demarrage X1000 PHOENIX"
+          echo "Branche : $BRANCHE"
+          echo "Moteurs : M1 M2 M3 M4 M5"
 
           python -B recherche_courses_x1000.py
 
@@ -74,9 +156,13 @@ jobs:
           git diff --exit-code
           git diff --cached --exit-code
 
-          test -z "$(
-            git ls-files --others --exclude-standard
-          )"
+          if [ -n "$(git ls-files --others --exclude-standard)" ]; then
+            echo "::error::Fichiers non suivis detectes"
+            exit 1
+          fi
+
+          echo "Integrite du depot : OK"
+          echo "Aucune modification detectee"
 
       - name: Bilan de securite
         if: always()
@@ -85,10 +171,16 @@ jobs:
           {
             echo "## X1000 PHOENIX"
             echo ""
-            echo "- Recherche quotidienne programmee"
-            echo "- Courses PMU France"
-            echo "- M1 a M5 et coordination"
+            echo "- Recherche PMU France"
+            echo "- Moteurs M1 a M5"
+            echo "- Coordination centrale"
+            echo "- Branche de reparation controlee"
+            echo "- Lecture seule imposee"
             echo "- Aucun FIGE automatique"
-            echo "- Aucune publication"
-            echo "- Archives protegees"
+            echo "- Aucune publication automatique"
+            echo "- Aucun commit ni push"
+            echo "- Aucun deploiement"
+            echo "- Verification integrite du depot"
+            echo ""
+            echo "Resultat recherche : ${{ steps.recherche.outcome }}"
           } >> "$GITHUB_STEP_SUMMARY"
