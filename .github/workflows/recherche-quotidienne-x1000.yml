@@ -3,7 +3,7 @@ name: X1000 - Recherche quotidienne M1-M5 securisee
 on:
   workflow_dispatch:
   schedule:
-    # UTC : 06h17 hiver / 07h17 ete a Paris
+    # 05h17 UTC : 06h17 hiver / 07h17 ete a Paris
     - cron: "17 5 * * *"
 
 permissions:
@@ -35,6 +35,7 @@ jobs:
       X1000_READ_ONLY: "1"
       X1000_NO_FIGE: "1"
       X1000_NO_PUBLICATION: "1"
+      X1000_BRANCHE_AUTORISEE: fix/x1000-v2-reparation-controlee
       X1000_SOURCE_URL: ${{ vars.X1000_SOURCE_URL }}
       X1000_SOURCE_HOST: ${{ vars.X1000_SOURCE_HOST }}
 
@@ -45,14 +46,24 @@ jobs:
           ref: fix/x1000-v2-reparation-controlee
           persist-credentials: false
 
-      - name: Controler identite et commit
+      - name: Controler identite branche et commit
         run: |
           set -euo pipefail
 
           BRANCHE="fix/x1000-v2-reparation-controlee"
           DEPOT="yadcaf-cloud/x1000-intelligence-hippique-v2"
 
-          test "$GITHUB_REPOSITORY" = "$DEPOT"
+          if [[ "$GITHUB_REPOSITORY" != "$DEPOT" ]]; then
+            echo "::error::Depot non autorise"
+            exit 1
+          fi
+
+          BRANCHE_LOCALE="$(git branch --show-current)"
+
+          if [[ -n "$BRANCHE_LOCALE" && "$BRANCHE_LOCALE" != "$BRANCHE" ]]; then
+            echo "::error::Branche locale non autorisee"
+            exit 1
+          fi
 
           git fetch --no-tags origin \
             "+refs/heads/${BRANCHE}:refs/remotes/origin/${BRANCHE}"
@@ -60,22 +71,25 @@ jobs:
           LOCAL="$(git rev-parse HEAD)"
           DISTANT="$(git rev-parse "refs/remotes/origin/${BRANCHE}")"
 
-          test "$LOCAL" = "$DISTANT" || {
+          if [[ "$LOCAL" != "$DISTANT" ]]; then
             echo "::error::Commit non autorise"
             exit 1
-          }
+          fi
 
-          test -n "$X1000_SOURCE_URL" || {
+          if [[ -z "$X1000_SOURCE_URL" ]]; then
             echo "::error::X1000_SOURCE_URL absente"
             exit 1
-          }
+          fi
 
-          test -n "$X1000_SOURCE_HOST" || {
+          if [[ -z "$X1000_SOURCE_HOST" ]]; then
             echo "::error::X1000_SOURCE_HOST absent"
             exit 1
-          }
+          fi
 
-          echo "Depot et commit autorises : OK"
+          echo "Depot : OK"
+          echo "Branche autorisee : OK"
+          echo "Commit autorise : OK"
+          echo "Sources configurees : OK"
 
       - name: Installer Python
         uses: actions/setup-python@v5
@@ -105,19 +119,28 @@ jobs:
 
           for nom in fichiers:
               chemin = Path(nom)
+
+              if not chemin.is_file():
+                  raise SystemExit(
+                      f"Fichier absent : {nom}"
+                  )
+
               ast.parse(
-                  chemin.read_text(encoding="utf-8"),
+                  chemin.read_text(encoding="utf-8-sig"),
                   filename=nom,
               )
+
               print("SYNTAXE OK :", nom)
 
           from moteurs import m1, m2, m3, m4, m5
           from integration_x1000 import executer_integration
 
           for indice, moteur in enumerate(
-              (m1, m2, m3, m4, m5), start=1
+              (m1, m2, m3, m4, m5),
+              start=1,
           ):
               assert moteur.MOTEUR == f"M{indice}"
+              print("MOTEUR OK :", moteur.MOTEUR)
 
           print("M1-M5 : OK")
           print("Coordination : import OK")
@@ -181,33 +204,41 @@ jobs:
         run: |
           set -euo pipefail
 
-          python -B - <<'PY'
-          import os
-          import subprocess
-          import sys
+          BRANCHE="fix/x1000-v2-reparation-controlee"
+          DEPOT="yadcaf-cloud/x1000-intelligence-hippique-v2"
 
-          branche = "fix/x1000-v2-reparation-controlee"
+          if [[ "$GITHUB_REPOSITORY" != "$DEPOT" ]]; then
+            echo "::error::Depot non autorise"
+            exit 1
+          fi
 
-          environnement = os.environ.copy()
+          git fetch --no-tags origin \
+            "+refs/heads/${BRANCHE}:refs/remotes/origin/${BRANCHE}"
 
-          # Le script existant controle GITHUB_HEAD_REF.
-          # Le checkout a ete verifie avant execution.
-          environnement["GITHUB_HEAD_REF"] = branche
+          LOCAL="$(git rev-parse HEAD)"
+          DISTANT="$(git rev-parse "refs/remotes/origin/${BRANCHE}")"
 
-          commande = [
-              sys.executable,
-              "-B",
-              "recherche_courses_x1000.py",
-          ]
+          if [[ "$LOCAL" != "$DISTANT" ]]; then
+            echo "::error::Commit non autorise"
+            exit 1
+          fi
 
-          resultat = subprocess.run(
-              commande,
-              env=environnement,
-              check=False,
-          )
+          echo "================================"
+          echo "X1000 PHOENIX V2.4"
+          echo "Recherche PMU France"
+          echo "Moteurs : M1 M2 M3 M4 M5"
+          echo "Coordination centrale"
+          echo "Branche et commit : OK"
+          echo "================================"
 
-          sys.exit(resultat.returncode)
-          PY
+          export GITHUB_HEAD_REF="$BRANCHE"
+          export GITHUB_REF_NAME="$BRANCHE"
+          export X1000_BRANCHE_AUTORISEE="$BRANCHE"
+          export X1000_READ_ONLY=1
+          export X1000_NO_FIGE=1
+          export X1000_NO_PUBLICATION=1
+
+          python -B recherche_courses_x1000.py
 
       - name: Verifier integrite complete
         if: always()
@@ -221,6 +252,7 @@ jobs:
           from pathlib import Path
 
           racine = Path.cwd()
+
           reference = (
               Path(os.environ["RUNNER_TEMP"])
               / "x1000-inventaire-initial.json"
@@ -260,8 +292,10 @@ jobs:
 
           ajoutes = sorted(actuel.keys() - initial.keys())
           supprimes = sorted(initial.keys() - actuel.keys())
+
           modifies = sorted(
-              cle for cle in initial.keys() & actuel.keys()
+              cle
+              for cle in initial.keys() & actuel.keys()
               if initial[cle] != actuel[cle]
           )
 
@@ -271,7 +305,9 @@ jobs:
               ("MODIFICATION", modifies),
           ):
               for fichier in fichiers:
-                  print(f"::error::{categorie} : {fichier}")
+                  print(
+                      f"::error::{categorie} : {fichier}"
+                  )
 
           if ajoutes or supprimes or modifies:
               raise SystemExit(
@@ -289,13 +325,14 @@ jobs:
         if: always()
         run: |
           {
-            echo "## X1000 PHOENIX - Recherche quotidienne"
+            echo "## X1000 PHOENIX V2.4"
             echo ""
             echo "- Branche : reparation controlee"
-            echo "- Sources : voir les journaux"
-            echo "- M1-M5 : voir les journaux"
+            echo "- Sources PMU : voir journaux"
+            echo "- M1-M5 : voir journaux"
+            echo "- Coordination : voir journaux"
             echo "- FIGE automatique : interdit"
             echo "- Publication : interdite"
             echo "- Deploiement : absent"
-            echo "- Integrite : voir le controle final"
+            echo "- Integrite : voir controle final"
           } >> "$GITHUB_STEP_SUMMARY"
